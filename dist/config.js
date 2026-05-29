@@ -81,6 +81,7 @@ export const DEFAULT_CONFIG = {
         modelFormat: 'full',
         modelOverride: '',
         customLine: '',
+        customLinePosition: 'last',
         timeFormat: 'relative',
     },
     colors: {
@@ -133,6 +134,9 @@ function validateTimeFormat(value) {
         || value === 'both'
         || value === 'elapsed'
         || value === 'elapsedAndAbsolute';
+}
+function validateCustomLinePosition(value) {
+    return value === 'first' || value === 'last';
 }
 function validateColorName(value) {
     return value === 'dim'
@@ -440,6 +444,9 @@ export function mergeConfig(userConfig) {
         customLine: typeof migrated.display?.customLine === 'string'
             ? migrated.display.customLine.slice(0, 80)
             : DEFAULT_CONFIG.display.customLine,
+        customLinePosition: validateCustomLinePosition(migrated.display?.customLinePosition)
+            ? migrated.display.customLinePosition
+            : DEFAULT_CONFIG.display.customLinePosition,
         timeFormat: validateTimeFormat(migrated.display?.timeFormat)
             ? migrated.display.timeFormat
             : DEFAULT_CONFIG.display.timeFormat,

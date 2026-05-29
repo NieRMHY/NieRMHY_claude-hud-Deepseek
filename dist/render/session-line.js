@@ -36,7 +36,12 @@ export function renderSessionLine(ctx) {
     const contextValueMode = display?.contextValue ?? 'percent';
     const contextValue = formatContextValue(ctx, percent, contextValueMode);
     const contextValueDisplay = `${getContextColor(percent, colors, contextThresholds)}${contextValue}${RESET}`;
-    // Model and context bar (FIRST)
+    const customLine = display?.customLine;
+    const customLinePosition = display?.customLinePosition ?? 'last';
+    if (customLine && customLinePosition === 'first') {
+        parts.push(customColor(customLine, colors));
+    }
+    // Model and context bar
     const providerLabel = getProviderLabel(ctx.stdin);
     const modelQualifier = providerLabel ?? undefined;
     let modelDisplay = modelQualifier ? `${model} | ${modelQualifier}` : model;
@@ -58,7 +63,7 @@ export function renderSessionLine(ctx) {
     else {
         parts.push(contextValueDisplay);
     }
-    // Project path + git status (SECOND)
+    // Project path + git status
     let projectPart = null;
     if (display?.showProject !== false && ctx.stdin.cwd) {
         // Split by both Unix (/) and Windows (\) separators for cross-platform support
@@ -280,9 +285,7 @@ export function renderSessionLine(ctx) {
     if (ctx.extraLabel) {
         parts.push(label(ctx.extraLabel, colors));
     }
-    // Custom line (static user-defined text)
-    const customLine = display?.customLine;
-    if (customLine) {
+    if (customLine && customLinePosition === 'last') {
         parts.push(customColor(customLine, colors));
     }
     let line = parts.join(' | ');
