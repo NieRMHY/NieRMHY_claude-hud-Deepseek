@@ -83,6 +83,7 @@ export const DEFAULT_CONFIG = {
         customLine: '',
         customLinePosition: 'last',
         timeFormat: 'relative',
+        autoCompactWindow: null,
     },
     colors: {
         context: 'green',
@@ -285,6 +286,12 @@ function validateNonNegativeInteger(value, fallback) {
     }
     return value;
 }
+function validateAutoCompactWindow(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+        return null;
+    }
+    return value;
+}
 function validateOptionalPath(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -450,6 +457,7 @@ export function mergeConfig(userConfig) {
         timeFormat: validateTimeFormat(migrated.display?.timeFormat)
             ? migrated.display.timeFormat
             : DEFAULT_CONFIG.display.timeFormat,
+        autoCompactWindow: validateAutoCompactWindow(migrated.display?.autoCompactWindow),
     };
     const colors = {
         context: validateColorValue(migrated.colors?.context)

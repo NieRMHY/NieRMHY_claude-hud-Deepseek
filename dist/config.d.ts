@@ -100,6 +100,7 @@ export interface HudConfig {
         customLine: string;
         customLinePosition: CustomLinePosition;
         timeFormat: TimeFormatMode;
+        autoCompactWindow: number | null;
     };
     colors: HudColorOverrides;
 }
