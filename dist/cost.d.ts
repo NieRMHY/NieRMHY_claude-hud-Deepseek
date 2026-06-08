@@ -5,12 +5,14 @@ export interface SessionCostEstimate {
     cacheCreationUsd: number;
     cacheReadUsd: number;
     outputUsd: number;
+    _currency?: string;
 }
 export interface SessionCostDisplay {
     totalUsd: number;
     source: 'native' | 'estimate';
+    _currency?: string;
 }
 export declare function estimateSessionCost(stdin: StdinData, sessionTokens: SessionTokenUsage | undefined): SessionCostEstimate | null;
 export declare function resolveSessionCost(stdin: StdinData, sessionTokens: SessionTokenUsage | undefined): SessionCostDisplay | null;
-export declare function formatUsd(amount: number): string;
+export declare function formatUsd(amount: number, currency?: string): string;
 //# sourceMappingURL=cost.d.ts.map
