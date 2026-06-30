@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { getOutputSpeed } from '../dist/speed-tracker.js';
@@ -37,6 +37,149 @@ test('getOutputSpeed returns null when output tokens are missing', () => {
     context_window: { current_usage: { input_tokens: 10 } },
   });
   assert.equal(speed, null);
+});
+
+test('getOutputSpeed estimates speed from transcript growth when output tokens are missing', async () => {
+  const tempHome = await createTempHome();
+  const transcriptPath = await createTranscript(tempHome);
+
+  try {
+    const base = { homeDir: () => tempHome };
+    const first = getOutputSpeed(
+      { transcript_path: transcriptPath, context_window: { current_usage: { input_tokens: 10 } } },
+      { ...base, now: () => 1000 }
+    );
+    assert.equal(first, null);
+
+    await writeFile(transcriptPath, 'x'.repeat(40), 'utf8');
+    const second = getOutputSpeed(
+      { transcript_path: transcriptPath, context_window: { current_usage: { input_tokens: 10 } } },
+      { ...base, now: () => 1500 }
+    );
+    assert.ok(second !== null);
+    assert.ok(Math.abs(second - 20) < 0.01);
+  } finally {
+    await rm(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('getOutputSpeed accumulates short transcript-growth windows until the fallback sample matures', async () => {
+  const tempHome = await createTempHome();
+  const transcriptPath = await createTranscript(tempHome);
+
+  try {
+    const base = { homeDir: () => tempHome };
+    const stdin = { transcript_path: transcriptPath, context_window: { current_usage: { input_tokens: 10 } } };
+
+    getOutputSpeed(stdin, { ...base, now: () => 1000 });
+
+    await writeFile(transcriptPath, 'x'.repeat(40), 'utf8');
+    assert.equal(getOutputSpeed(stdin, { ...base, now: () => 1200 }), null);
+
+    await writeFile(transcriptPath, 'x'.repeat(80), 'utf8');
+    assert.equal(getOutputSpeed(stdin, { ...base, now: () => 1400 }), null);
+
+    await writeFile(transcriptPath, 'x'.repeat(120), 'utf8');
+    const matured = getOutputSpeed(stdin, { ...base, now: () => 1600 });
+    assert.ok(matured !== null);
+    assert.ok(Math.abs(matured - 50) < 0.01);
+  } finally {
+    await rm(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('getOutputSpeed ignores fallback samples without transcript growth', async () => {
+  const tempHome = await createTempHome();
+  const transcriptPath = await createTranscript(tempHome);
+
+  try {
+    const base = { homeDir: () => tempHome };
+    const stdin = { transcript_path: transcriptPath, context_window: { current_usage: { input_tokens: 10 } } };
+
+    getOutputSpeed(stdin, { ...base, now: () => 1000 });
+    const idle = getOutputSpeed(stdin, { ...base, now: () => 1500 });
+    assert.equal(idle, null);
+
+    await writeFile(transcriptPath, 'x'.repeat(40), 'utf8');
+    const afterIdle = getOutputSpeed(stdin, { ...base, now: () => 2000 });
+    assert.ok(afterIdle !== null);
+    assert.ok(Math.abs(afterIdle - 20) < 0.01);
+  } finally {
+    await rm(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('getOutputSpeed ignores stale fallback windows', async () => {
+  const tempHome = await createTempHome();
+  const transcriptPath = await createTranscript(tempHome);
+
+  try {
+    const base = { homeDir: () => tempHome };
+    const stdin = { transcript_path: transcriptPath, context_window: { current_usage: { input_tokens: 10 } } };
+
+    getOutputSpeed(stdin, { ...base, now: () => 1000 });
+
+    await writeFile(transcriptPath, 'x'.repeat(40), 'utf8');
+    const stale = getOutputSpeed(stdin, { ...base, now: () => 8000 });
+    assert.equal(stale, null);
+
+    await writeFile(transcriptPath, 'x'.repeat(80), 'utf8');
+    const fresh = getOutputSpeed(stdin, { ...base, now: () => 8500 });
+    assert.ok(fresh !== null);
+    assert.ok(Math.abs(fresh - 20) < 0.01);
+  } finally {
+    await rm(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('getOutputSpeed creates fallback cache under CLAUDE_CONFIG_DIR by default', async () => {
+  const tempHome = await createTempHome();
+  const customConfigDir = path.join(tempHome, '.claude-alt');
+  const originalHome = process.env.HOME;
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  process.env.HOME = tempHome;
+  process.env.CLAUDE_CONFIG_DIR = customConfigDir;
+
+  try {
+    const transcriptPath = await createTranscript(tempHome);
+    const speed = getOutputSpeed(
+      { transcript_path: transcriptPath, context_window: { current_usage: { input_tokens: 10 } } },
+      { now: () => 1000 }
+    );
+    assert.equal(speed, null);
+
+    const customCacheDir = path.join(customConfigDir, 'plugins', 'claude-hud', 'speed-cache');
+    const defaultCacheDir = path.join(tempHome, '.claude', 'plugins', 'claude-hud', 'speed-cache');
+    assert.equal(existsSync(customCacheDir), true);
+    assert.equal(existsSync(defaultCacheDir), false);
+    assert.equal((await stat(customCacheDir)).mode & 0o777, 0o700);
+
+    const cacheFiles = await readdir(customCacheDir);
+    const fileSizeCache = cacheFiles.find((name) => name.endsWith('.json.fs'));
+    assert.ok(fileSizeCache, `expected file-size cache in ${cacheFiles.join(', ')}`);
+    assert.equal((await stat(path.join(customCacheDir, fileSizeCache))).mode & 0o777, 0o600);
+  } finally {
+    restoreEnvVar('HOME', originalHome);
+    restoreEnvVar('CLAUDE_CONFIG_DIR', originalConfigDir);
+    await rm(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('getOutputSpeed ignores fallback tracking for non-file transcript paths', async () => {
+  const tempHome = await createTempHome();
+
+  try {
+    const speed = getOutputSpeed(
+      { transcript_path: tempHome, context_window: { current_usage: { input_tokens: 10 } } },
+      { homeDir: () => tempHome, now: () => 1000 }
+    );
+    assert.equal(speed, null);
+
+    const cacheDir = path.join(tempHome, '.claude', 'plugins', 'claude-hud', 'speed-cache');
+    assert.equal(existsSync(cacheDir), false);
+  } finally {
+    await rm(tempHome, { recursive: true, force: true });
+  }
 });
 
 test('getOutputSpeed returns null when transcript_path is missing', async () => {
@@ -174,6 +317,12 @@ test('getOutputSpeed writes cache under CLAUDE_CONFIG_DIR by default', async () 
     const defaultCacheDir = path.join(tempHome, '.claude', 'plugins', 'claude-hud', 'speed-cache');
     assert.equal(existsSync(customCacheDir), true);
     assert.equal(existsSync(defaultCacheDir), false);
+    assert.equal((await stat(customCacheDir)).mode & 0o777, 0o700);
+
+    const cacheFiles = await readdir(customCacheDir);
+    const speedCache = cacheFiles.find((name) => name.endsWith('.json'));
+    assert.ok(speedCache, `expected speed cache in ${cacheFiles.join(', ')}`);
+    assert.equal((await stat(path.join(customCacheDir, speedCache))).mode & 0o777, 0o600);
   } finally {
     restoreEnvVar('HOME', originalHome);
     restoreEnvVar('CLAUDE_CONFIG_DIR', originalConfigDir);

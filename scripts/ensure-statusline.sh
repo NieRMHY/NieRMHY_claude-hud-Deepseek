@@ -1,36 +1,37 @@
 #!/usr/bin/env bash
-# SessionStart hook: 确保 ~/.claude/settings.json 有指向本插件 wrapper 的 statusLine
-# 触发链: plugin.json hooks → hooks/hooks.json → SessionStart → 本脚本
-# 适用场景: cc-switch 等工具覆盖 settings.json 后自动恢复 statusLine
+# SessionStart hook: cc-switch 等工具覆盖 settings.json 后自动恢复 statusLine
+# 由 plugin.json hooks → hooks/hooks.json → SessionStart 触发
+#
+# 工作机制（幂等）：
+#   - settings.json 有 statusLine → 备份到 $claude_dir/.claude-hud-statusline.json
+#   - settings.json 没有 statusLine 但有备份 → 从备份恢复
+#   - 都没有 → 跳过（首次使用需用户主动跑 /claude-hud:setup 配置一次）
 
 set -e
 
 claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-wrapper_target="$claude_dir/statusline-wrapper.sh"
 settings="$claude_dir/settings.json"
-wrapper_source="${CLAUDE_PLUGIN_ROOT:-}/scripts/statusline-wrapper.sh"
+backup="$claude_dir/.claude-hud-statusline.json"
 
-# wrapper 未部署时从插件目录复制（首次启动即装即用）
-if [ -f "$wrapper_source" ] && [ ! -f "$wrapper_target" ]; then
-  cp "$wrapper_source" "$wrapper_target"
-  chmod +x "$wrapper_target"
-fi
+python3 - "$settings" "$backup" <<'PY'
+import json, os, sys
+settings, backup = sys.argv[1], sys.argv[2]
 
-[ -f "$wrapper_target" ] || exit 0
-
-# 修正 settings.json 的 statusLine 字段
-python3 - "$settings" "$wrapper_target" <<'PY'
-import json, sys
-path, wrapper = sys.argv[1], sys.argv[2]
 try:
-    with open(path) as f:
-        data = json.load(f)
+    with open(settings) as f:
+        d = json.load(f)
 except (FileNotFoundError, json.JSONDecodeError):
-    data = {}
+    d = {}
 
-expected = {"type": "command", "command": f"bash {wrapper}"}
-if data.get("statusLine") != expected:
-    data["statusLine"] = expected
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+current = d.get("statusLine")
+
+if current:
+    with open(backup, "w") as f:
+        json.dump(current, f)
+elif os.path.exists(backup):
+    with open(backup) as f:
+        sl = json.load(f)
+    d["statusLine"] = sl
+    with open(settings, "w") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
 PY

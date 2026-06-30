@@ -10,7 +10,6 @@ export function renderCostEstimate(ctx) {
         return null;
     }
     const labelKey = cost.source === 'native' ? 'label.cost' : 'label.estimatedCost';
-    // Modify by MHY: pass currency from cost
-    return label(`${t(labelKey)} ${formatUsd(cost.totalUsd, cost._currency)}`, ctx.config?.colors);
+    return label(`${t(labelKey)} ${formatUsd(cost.totalUsd)}`, ctx.config?.colors);
 }
 //# sourceMappingURL=cost.js.map

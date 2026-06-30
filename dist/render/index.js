@@ -1,9 +1,10 @@
 import { DEFAULT_ELEMENT_ORDER, DEFAULT_MERGE_GROUPS } from '../config.js';
 import { renderSessionLine } from './session-line.js';
 import { renderToolsLine } from './tools-line.js';
+import { renderSkillsLine, renderMcpLine } from './skills-mcp-line.js';
 import { renderAgentsLine } from './agents-line.js';
 import { renderTodosLine } from './todos-line.js';
-import { renderIdentityLine, renderProjectLine, renderAddedDirsLine, renderGitFilesLine, renderEnvironmentLine, renderPromptCacheLine, renderUsageLine, renderMemoryLine, renderSessionTokensLine, renderSessionTimeLine, } from './lines/index.js';
+import { renderIdentityLine, renderProjectLine, renderAddedDirsLine, renderGitFilesLine, renderEnvironmentLine, renderPromptCacheLine, renderUsageLine, renderMemoryLine, renderSessionTokensLine, renderCompactionsLine, renderSessionTimeLine, } from './lines/index.js';
 import { dim, RESET } from './colors.js';
 import { getTerminalWidth, UNKNOWN_TERMINAL_WIDTH } from '../utils/terminal.js';
 import { codePointCellWidth, isCjkAmbiguousWide } from './width.js';
@@ -252,7 +253,7 @@ function makeSeparator(length) {
     const repeats = Math.max(1, Math.floor(length / cellsPerDash));
     return dim('─'.repeat(repeats));
 }
-const ACTIVITY_ELEMENTS = new Set(['tools', 'agents', 'todos']);
+const ACTIVITY_ELEMENTS = new Set(['tools', 'skills', 'mcp', 'agents', 'todos']);
 function buildMergeGroupLookup(mergeGroups) {
     const lookup = new Map();
     for (const group of mergeGroups) {
@@ -283,6 +284,18 @@ function collectActivityLines(ctx) {
         const toolsLine = renderToolsLine(ctx);
         if (toolsLine) {
             activityLines.push(toolsLine);
+        }
+    }
+    if (display?.showSkills === true) {
+        const skillsLine = renderSkillsLine(ctx);
+        if (skillsLine) {
+            activityLines.push(skillsLine);
+        }
+    }
+    if (display?.showMcp === true) {
+        const mcpLine = renderMcpLine(ctx);
+        if (mcpLine) {
+            activityLines.push(mcpLine);
         }
     }
     if (display?.showAgents !== false) {
@@ -319,6 +332,10 @@ function renderElementLine(ctx, element, options) {
             return renderEnvironmentLine(ctx);
         case 'tools':
             return display?.showTools === false ? null : renderToolsLine(ctx);
+        case 'skills':
+            return display?.showSkills === true ? renderSkillsLine(ctx) : null;
+        case 'mcp':
+            return display?.showMcp === true ? renderMcpLine(ctx) : null;
         case 'agents':
             return display?.showAgents === false ? null : renderAgentsLine(ctx);
         case 'todos':
@@ -427,6 +444,11 @@ export function render(ctx) {
             if (sessionTokensLine) {
                 lines.push(sessionTokensLine);
             }
+        }
+        // Compaction count (opt-in, hidden until the first compaction)
+        const compactionsLine = renderCompactionsLine(ctx);
+        if (compactionsLine) {
+            lines.push(compactionsLine);
         }
         // Advisor is rendered inline on the project line; see renderProjectLine.
         if (showSeparators) {

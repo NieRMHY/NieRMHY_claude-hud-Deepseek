@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { getHudPluginDir } from './claude-config-dir.js';
+import { createDebug } from './debug.js';
+const debug = createDebug('config');
 export const DEFAULT_ELEMENT_ORDER = [
     'project',
     'addedDirs',
@@ -11,6 +13,8 @@ export const DEFAULT_ELEMENT_ORDER = [
     'memory',
     'environment',
     'tools',
+    'skills',
+    'mcp',
     'agents',
     'todos',
     'sessionTime',
@@ -54,6 +58,8 @@ export const DEFAULT_CONFIG = {
         showResetLabel: true,
         usageCompact: false,
         showTools: false,
+        showSkills: false,
+        showMcp: false,
         toolNameMaxLength: 0,
         toolsMaxVisible: 4,
         showAgents: false,
@@ -68,6 +74,7 @@ export const DEFAULT_CONFIG = {
         showOutputStyle: false,
         showSessionStartDate: false,
         showLastResponseAt: false,
+        showCompactions: false,
         mergeGroups: DEFAULT_MERGE_GROUPS.map(group => [...group]),
         autocompactBuffer: 'enabled',
         contextWarningThreshold: 70,
@@ -80,6 +87,8 @@ export const DEFAULT_CONFIG = {
         externalUsageFreshnessMs: 300000,
         modelFormat: 'full',
         modelOverride: '',
+        showProvider: false,
+        providerName: '',
         customLine: '',
         customLinePosition: 'last',
         timeFormat: 'relative',
@@ -396,6 +405,12 @@ export function mergeConfig(userConfig) {
         showTools: typeof migrated.display?.showTools === 'boolean'
             ? migrated.display.showTools
             : DEFAULT_CONFIG.display.showTools,
+        showSkills: typeof migrated.display?.showSkills === 'boolean'
+            ? migrated.display.showSkills
+            : DEFAULT_CONFIG.display.showSkills,
+        showMcp: typeof migrated.display?.showMcp === 'boolean'
+            ? migrated.display.showMcp
+            : DEFAULT_CONFIG.display.showMcp,
         toolNameMaxLength: validateNonNegativeInteger(migrated.display?.toolNameMaxLength, DEFAULT_CONFIG.display.toolNameMaxLength),
         toolsMaxVisible: validateNonNegativeInteger(migrated.display?.toolsMaxVisible, DEFAULT_CONFIG.display.toolsMaxVisible),
         showAgents: typeof migrated.display?.showAgents === 'boolean'
@@ -432,6 +447,9 @@ export function mergeConfig(userConfig) {
         showLastResponseAt: typeof migrated.display?.showLastResponseAt === 'boolean'
             ? migrated.display.showLastResponseAt
             : DEFAULT_CONFIG.display.showLastResponseAt,
+        showCompactions: typeof migrated.display?.showCompactions === 'boolean'
+            ? migrated.display.showCompactions
+            : DEFAULT_CONFIG.display.showCompactions,
         mergeGroups: validateMergeGroups(migrated.display?.mergeGroups),
         autocompactBuffer: validateAutocompactBuffer(migrated.display?.autocompactBuffer)
             ? migrated.display.autocompactBuffer
@@ -450,6 +468,12 @@ export function mergeConfig(userConfig) {
         modelOverride: typeof migrated.display?.modelOverride === 'string'
             ? migrated.display.modelOverride.slice(0, 80)
             : DEFAULT_CONFIG.display.modelOverride,
+        showProvider: typeof migrated.display?.showProvider === 'boolean'
+            ? migrated.display.showProvider
+            : DEFAULT_CONFIG.display.showProvider,
+        providerName: typeof migrated.display?.providerName === 'string'
+            ? migrated.display.providerName.slice(0, 40)
+            : DEFAULT_CONFIG.display.providerName,
         customLine: typeof migrated.display?.customLine === 'string'
             ? migrated.display.customLine.slice(0, 80)
             : DEFAULT_CONFIG.display.customLine,
@@ -520,7 +544,8 @@ export async function loadConfig() {
         const userConfig = JSON.parse(content);
         return mergeConfig(userConfig);
     }
-    catch {
+    catch (err) {
+        debug('Failed to load config from %s, using defaults:', configPath, err instanceof Error ? err.message : err);
         return mergeConfig({});
     }
 }

@@ -2,7 +2,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { getHudPluginDir } from './claude-config-dir.js';
+import { createDebug } from './debug.js';
 import type { Language } from './i18n/types.js';
+
+const debug = createDebug('config');
 
 export type LineLayoutType = 'compact' | 'expanded';
 
@@ -21,7 +24,20 @@ export type GitBranchOverflowMode = 'truncate' | 'wrap';
 export type ModelFormatMode = 'full' | 'compact' | 'short';
 export type TimeFormatMode = 'relative' | 'absolute' | 'both' | 'elapsed' | 'elapsedAndAbsolute';
 export type CustomLinePosition = 'first' | 'last';
-export type HudElement = 'project' | 'addedDirs' | 'context' | 'usage' | 'promptCache' | 'memory' | 'environment' | 'tools' | 'agents' | 'todos' | 'sessionTime';
+export type HudElement =
+  | 'project'
+  | 'addedDirs'
+  | 'context'
+  | 'usage'
+  | 'promptCache'
+  | 'memory'
+  | 'environment'
+  | 'tools'
+  | 'skills'
+  | 'mcp'
+  | 'agents'
+  | 'todos'
+  | 'sessionTime';
 
 export type AddedDirsLayout = 'inline' | 'line';
 export type HudColorName =
@@ -62,6 +78,8 @@ export const DEFAULT_ELEMENT_ORDER: HudElement[] = [
   'memory',
   'environment',
   'tools',
+  'skills',
+  'mcp',
   'agents',
   'todos',
   'sessionTime',
@@ -108,6 +126,8 @@ export interface HudConfig {
     showResetLabel: boolean;
     usageCompact: boolean;
     showTools: boolean;
+    showSkills: boolean;
+    showMcp: boolean;
     toolNameMaxLength: number;
     toolsMaxVisible: number;
     showAgents: boolean;
@@ -122,6 +142,9 @@ export interface HudConfig {
     showOutputStyle: boolean;
     showSessionStartDate: boolean;
     showLastResponseAt: boolean;
+    // Show how many context compactions (manual /compact or auto) have
+    // occurred this session, counted from transcript compact_boundary entries.
+    showCompactions: boolean;
     mergeGroups: HudElement[][];
     autocompactBuffer: AutocompactBufferMode;
     contextWarningThreshold: number;
@@ -134,6 +157,12 @@ export interface HudConfig {
     externalUsageFreshnessMs: number;
     modelFormat: ModelFormatMode;
     modelOverride: string;
+    // Show the provider label (custom name or auto-detected Bedrock/Vertex/
+    // Enterprise) BEFORE the model name on the project line. Default off.
+    showProvider: boolean;
+    // Explicit provider label, e.g. for custom proxies where the provider can't
+    // be auto-detected. Falls back to auto-detection when empty.
+    providerName: string;
     customLine: string;
     customLinePosition: CustomLinePosition;
     timeFormat: TimeFormatMode;
@@ -185,6 +214,8 @@ export const DEFAULT_CONFIG: HudConfig = {
     showResetLabel: true,
     usageCompact: false,
     showTools: false,
+    showSkills: false,
+    showMcp: false,
     toolNameMaxLength: 0,
     toolsMaxVisible: 4,
     showAgents: false,
@@ -199,6 +230,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showOutputStyle: false,
     showSessionStartDate: false,
     showLastResponseAt: false,
+    showCompactions: false,
     mergeGroups: DEFAULT_MERGE_GROUPS.map(group => [...group]),
     autocompactBuffer: 'enabled',
     contextWarningThreshold: 70,
@@ -211,6 +243,8 @@ export const DEFAULT_CONFIG: HudConfig = {
     externalUsageFreshnessMs: 300000,
     modelFormat: 'full',
     modelOverride: '',
+    showProvider: false,
+    providerName: '',
     customLine: '',
     customLinePosition: 'last',
     timeFormat: 'relative',
@@ -571,6 +605,12 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     showTools: typeof migrated.display?.showTools === 'boolean'
       ? migrated.display.showTools
       : DEFAULT_CONFIG.display.showTools,
+    showSkills: typeof migrated.display?.showSkills === 'boolean'
+      ? migrated.display.showSkills
+      : DEFAULT_CONFIG.display.showSkills,
+    showMcp: typeof migrated.display?.showMcp === 'boolean'
+      ? migrated.display.showMcp
+      : DEFAULT_CONFIG.display.showMcp,
     toolNameMaxLength: validateNonNegativeInteger(
       migrated.display?.toolNameMaxLength,
       DEFAULT_CONFIG.display.toolNameMaxLength,
@@ -616,6 +656,9 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     showLastResponseAt: typeof migrated.display?.showLastResponseAt === 'boolean'
       ? migrated.display.showLastResponseAt
       : DEFAULT_CONFIG.display.showLastResponseAt,
+    showCompactions: typeof migrated.display?.showCompactions === 'boolean'
+      ? migrated.display.showCompactions
+      : DEFAULT_CONFIG.display.showCompactions,
     mergeGroups: validateMergeGroups(migrated.display?.mergeGroups),
     autocompactBuffer: validateAutocompactBuffer(migrated.display?.autocompactBuffer)
       ? migrated.display.autocompactBuffer
@@ -640,6 +683,12 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     modelOverride: typeof migrated.display?.modelOverride === 'string'
       ? migrated.display.modelOverride.slice(0, 80)
       : DEFAULT_CONFIG.display.modelOverride,
+    showProvider: typeof migrated.display?.showProvider === 'boolean'
+      ? migrated.display.showProvider
+      : DEFAULT_CONFIG.display.showProvider,
+    providerName: typeof migrated.display?.providerName === 'string'
+      ? migrated.display.providerName.slice(0, 40)
+      : DEFAULT_CONFIG.display.providerName,
     customLine: typeof migrated.display?.customLine === 'string'
       ? migrated.display.customLine.slice(0, 80)
       : DEFAULT_CONFIG.display.customLine,
@@ -714,7 +763,8 @@ export async function loadConfig(): Promise<HudConfig> {
     const content = fs.readFileSync(configPath, 'utf-8');
     const userConfig = JSON.parse(content) as Partial<HudConfig>;
     return mergeConfig(userConfig);
-  } catch {
+  } catch (err) {
+    debug('Failed to load config from %s, using defaults:', configPath, err instanceof Error ? err.message : err);
     return mergeConfig({});
   }
 }

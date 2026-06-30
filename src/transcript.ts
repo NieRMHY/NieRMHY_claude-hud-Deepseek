@@ -1,10 +1,14 @@
-import * as fs from 'fs';
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import * as readline from 'readline';
+import * as readline from 'node:readline';
 import { createHash } from 'node:crypto';
 import { getHudPluginDir } from './claude-config-dir.js';
+import { createDebug } from './debug.js';
 import type { TranscriptData, ToolEntry, AgentEntry, TodoItem, SessionTokenUsage } from './types.js';
+import { sanitizeDisplayText } from './utils/sanitize.js';
+
+const debug = createDebug('transcript');
 
 interface TranscriptLine {
   timestamp?: string;
@@ -60,6 +64,8 @@ interface SerializedAgentEntry extends Omit<AgentEntry, 'startTime' | 'endTime'>
 
 interface SerializedTranscriptData {
   tools: SerializedToolEntry[];
+  skills: string[];
+  mcpServers: string[];
   agents: SerializedAgentEntry[];
   todos: TodoItem[];
   sessionStart?: string;
@@ -68,6 +74,7 @@ interface SerializedTranscriptData {
   sessionTokens?: SessionTokenUsage;
   lastCompactBoundaryAt?: string;
   lastCompactPostTokens?: number;
+  compactionCount?: number;
   advisorModel?: string;
 }
 
@@ -78,7 +85,9 @@ interface TranscriptCacheFile {
   data: SerializedTranscriptData;
 }
 
-const TRANSCRIPT_CACHE_VERSION = 7;
+const TRANSCRIPT_CACHE_VERSION = 9;
+const MCP_TOOL_NAME_PATTERN = /^mcp__(.+?)__(.+)$/;
+const ACTIVITY_NAME_MAX_LEN = 64;
 
 // Hard cap on the advisor model ID captured from the transcript. Real Claude
 // model IDs (e.g. "claude-haiku-4-5-20251001") fit comfortably under this; the
@@ -110,6 +119,43 @@ function normalizeSessionTokens(tokens: unknown): SessionTokenUsage | undefined 
   };
 }
 
+function normalizeNameList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const item of value) {
+    const name = normalizeActivityName(item);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
+
+  return names;
+}
+
+function normalizeActivityName(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const sanitized = sanitizeDisplayText(value).trim();
+
+  if (!sanitized) {
+    return undefined;
+  }
+
+  if (sanitized.length <= ACTIVITY_NAME_MAX_LEN) {
+    return sanitized;
+  }
+
+  return `${sanitized.slice(0, ACTIVITY_NAME_MAX_LEN - 1)}…`;
+}
+
 function getTranscriptCachePath(transcriptPath: string, homeDir: string): string {
   const hash = createHash('sha256').update(path.resolve(transcriptPath)).digest('hex');
   return path.join(getHudPluginDir(homeDir), 'transcript-cache', `${hash}.json`);
@@ -118,7 +164,8 @@ function getTranscriptCachePath(transcriptPath: string, homeDir: string): string
 function canonicalizeTranscriptPath(transcriptPath: string): string | null {
   try {
     return fs.realpathSync(transcriptPath);
-  } catch {
+  } catch (err) {
+    debug('Failed to resolve transcript path %s:', transcriptPath, err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -127,13 +174,15 @@ function readTranscriptFileState(transcriptPath: string): TranscriptFileState | 
   try {
     const stat = fs.statSync(transcriptPath);
     if (!stat.isFile()) {
+      debug('Transcript path is not a file: %s', transcriptPath);
       return null;
     }
     return {
       mtimeMs: stat.mtimeMs,
       size: stat.size,
     };
-  } catch {
+  } catch (err) {
+    debug('Failed to stat transcript file %s:', transcriptPath, err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -145,6 +194,8 @@ function serializeTranscriptData(data: TranscriptData): SerializedTranscriptData
       startTime: tool.startTime.toISOString(),
       endTime: tool.endTime?.toISOString(),
     })),
+    skills: [...data.skills],
+    mcpServers: [...data.mcpServers],
     agents: data.agents.map((agent) => ({
       ...agent,
       startTime: agent.startTime.toISOString(),
@@ -157,6 +208,7 @@ function serializeTranscriptData(data: TranscriptData): SerializedTranscriptData
     sessionTokens: data.sessionTokens,
     lastCompactBoundaryAt: data.lastCompactBoundaryAt?.toISOString(),
     lastCompactPostTokens: data.lastCompactPostTokens,
+    compactionCount: data.compactionCount,
     advisorModel: data.advisorModel,
   };
 }
@@ -168,6 +220,8 @@ function deserializeTranscriptData(data: SerializedTranscriptData): TranscriptDa
       startTime: new Date(tool.startTime),
       endTime: tool.endTime ? new Date(tool.endTime) : undefined,
     })),
+    skills: normalizeNameList(data.skills),
+    mcpServers: normalizeNameList(data.mcpServers),
     agents: data.agents.map((agent) => ({
       ...agent,
       startTime: new Date(agent.startTime),
@@ -180,6 +234,9 @@ function deserializeTranscriptData(data: SerializedTranscriptData): TranscriptDa
     sessionTokens: normalizeSessionTokens(data.sessionTokens),
     lastCompactBoundaryAt: data.lastCompactBoundaryAt ? new Date(data.lastCompactBoundaryAt) : undefined,
     lastCompactPostTokens: typeof data.lastCompactPostTokens === 'number' ? data.lastCompactPostTokens : undefined,
+    compactionCount: typeof data.compactionCount === 'number' && Number.isFinite(data.compactionCount) && data.compactionCount >= 0
+      ? Math.trunc(data.compactionCount)
+      : undefined,
     advisorModel: typeof data.advisorModel === 'string' && data.advisorModel.length > 0
       ? data.advisorModel.slice(0, ADVISOR_MODEL_MAX_LEN)
       : undefined,
@@ -203,7 +260,8 @@ function readTranscriptCache(transcriptPath: string, state: TranscriptFileState)
     }
 
     return deserializeTranscriptData(parsed.data);
-  } catch {
+  } catch (err) {
+    debug('Failed to read transcript cache:', err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -211,7 +269,13 @@ function readTranscriptCache(transcriptPath: string, state: TranscriptFileState)
 function writeTranscriptCache(transcriptPath: string, state: TranscriptFileState, data: TranscriptData): void {
   try {
     const cachePath = getTranscriptCachePath(transcriptPath, os.homedir());
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const cacheDir = path.dirname(cachePath);
+    fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(cacheDir, 0o700);
+    } catch {
+      // Best-effort: some filesystems do not support POSIX modes.
+    }
     const payload: TranscriptCacheFile = {
       version: TRANSCRIPT_CACHE_VERSION,
       transcriptPath: path.resolve(transcriptPath),
@@ -219,14 +283,21 @@ function writeTranscriptCache(transcriptPath: string, state: TranscriptFileState
       data: serializeTranscriptData(data),
     };
     fs.writeFileSync(cachePath, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 });
-  } catch {
-    // Cache failures are non-fatal; fall back to fresh parsing next time.
+    try {
+      fs.chmodSync(cachePath, 0o600);
+    } catch {
+      // Best-effort: cache permissions should not break rendering.
+    }
+  } catch (err) {
+    debug('Failed to write transcript cache:', err instanceof Error ? err.message : err);
   }
 }
 
 export async function parseTranscript(transcriptPath: string): Promise<TranscriptData> {
   const result: TranscriptData = {
     tools: [],
+    skills: [],
+    mcpServers: [],
     agents: [],
     todos: [],
   };
@@ -251,6 +322,8 @@ export async function parseTranscript(transcriptPath: string): Promise<Transcrip
   }
 
   const toolMap = new Map<string, ToolEntry>();
+  const skillSet = new Set<string>();
+  const mcpServerSet = new Set<string>();
   const agentMap = new Map<string, AgentEntry>();
   let latestTodos: TodoItem[] = [];
   const taskIdToIndex = new Map<string, number>();
@@ -260,6 +333,7 @@ export async function parseTranscript(transcriptPath: string): Promise<Transcrip
   let latestAdvisorModel: string | undefined;
   let lastCompactBoundaryAt: Date | undefined;
   let lastCompactPostTokens: number | undefined;
+  let compactionCount = 0;
   const sessionTokens: SessionTokenUsage = {
     inputTokens: 0,
     outputTokens: 0,
@@ -326,6 +400,7 @@ export async function parseTranscript(transcriptPath: string): Promise<Transcrip
         if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
           const ts = entry.timestamp ? new Date(entry.timestamp) : null;
           if (ts && !Number.isNaN(ts.getTime())) {
+            compactionCount += 1;
             if (!lastCompactBoundaryAt || ts.getTime() > lastCompactBoundaryAt.getTime()) {
               lastCompactBoundaryAt = ts;
               const post = entry.compactMetadata?.postTokens;
@@ -348,16 +423,16 @@ export async function parseTranscript(transcriptPath: string): Promise<Transcrip
             }
           }
         }
-        processEntry(entry, toolMap, agentMap, taskIdToIndex, latestTodos, result);
-      } catch {
+        processEntry(entry, toolMap, skillSet, mcpServerSet, agentMap, taskIdToIndex, latestTodos, result);
+      } catch (err) {
         lastUsageKey = undefined;
-        // Skip malformed lines
+        debug('Skipping malformed transcript line:', err instanceof Error ? err.message : err);
       }
     }
 
     parsedCleanly = true;
-  } catch {
-    // Return partial results on error
+  } catch (err) {
+    debug('Transcript stream read error, returning partial results:', err instanceof Error ? err.message : err);
   }
 
   // Resolve agent completion: prefer queue-operation timestamps (accurate for
@@ -376,12 +451,15 @@ export async function parseTranscript(transcriptPath: string): Promise<Transcrip
     }
   }
   result.tools = Array.from(toolMap.values()).slice(-20);
+  result.skills = Array.from(skillSet.values());
+  result.mcpServers = Array.from(mcpServerSet.values());
   result.agents = Array.from(agentMap.values()).slice(-10);
   result.todos = latestTodos;
   result.sessionName = customTitle ?? latestSlug;
   result.sessionTokens = sessionTokens;
   result.lastCompactBoundaryAt = lastCompactBoundaryAt;
   result.lastCompactPostTokens = lastCompactPostTokens;
+  result.compactionCount = compactionCount;
   result.advisorModel = latestAdvisorModel;
   if (parsedCleanly) {
     writeTranscriptCache(canonicalTranscriptPath, transcriptState, result);
@@ -397,6 +475,8 @@ export function _setCreateReadStreamForTests(impl: typeof fs.createReadStream | 
 function processEntry(
   entry: TranscriptLine,
   toolMap: Map<string, ToolEntry>,
+  skillSet: Set<string>,
+  mcpServerSet: Set<string>,
   agentMap: Map<string, AgentEntry>,
   taskIdToIndex: Map<string, number>,
   latestTodos: TodoItem[],
@@ -418,6 +498,18 @@ function processEntry(
 
   for (const block of content) {
     if (block.type === 'tool_use' && block.id && block.name) {
+      const skillName = block.name === 'Skill'
+        ? normalizeSkillName(block.input?.skill)
+        : undefined;
+      if (skillName) {
+        skillSet.add(skillName);
+      }
+
+      const mcpServerName = extractMcpServerName(block.name);
+      if (mcpServerName) {
+        mcpServerSet.add(mcpServerName);
+      }
+
       const toolEntry: ToolEntry = {
         id: block.id,
         name: block.name,
@@ -541,14 +633,32 @@ function extractTarget(toolName: string, input?: Record<string, unknown>): strin
     case 'Grep':
       return input.pattern as string;
     case 'Skill':
-      return typeof input.skill === 'string' && input.skill.trim().length > 0
-        ? input.skill
-        : undefined;
+      return normalizeSkillName(input.skill);
     case 'Bash':
-      const cmd = input.command as string;
-      return cmd?.slice(0, 30) + (cmd?.length > 30 ? '...' : '');
+      if (typeof input.command !== 'string') {
+        return undefined;
+      }
+      const cmd = input.command.replace(/\s+/g, ' ').trim();
+      return cmd
+        ? cmd.length > 30
+          ? `${cmd.slice(0, 30).trimEnd()}...`
+          : cmd
+        : undefined;
   }
   return undefined;
+}
+
+function normalizeSkillName(value: unknown): string | undefined {
+  return normalizeActivityName(value);
+}
+
+function extractMcpServerName(toolName: string): string | undefined {
+  const match = MCP_TOOL_NAME_PATTERN.exec(toolName);
+  if (!match) {
+    return undefined;
+  }
+
+  return normalizeActivityName(match[1]);
 }
 
 function resolveTaskIndex(

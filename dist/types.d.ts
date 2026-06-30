@@ -105,6 +105,8 @@ export interface SessionTokenUsage {
 }
 export interface TranscriptData {
     tools: ToolEntry[];
+    skills: string[];
+    mcpServers: string[];
     agents: AgentEntry[];
     todos: TodoItem[];
     sessionStart?: Date;
@@ -113,6 +115,7 @@ export interface TranscriptData {
     sessionTokens?: SessionTokenUsage;
     lastCompactBoundaryAt?: Date;
     lastCompactPostTokens?: number;
+    compactionCount?: number;
     advisorModel?: string;
 }
 export interface RenderContext {
