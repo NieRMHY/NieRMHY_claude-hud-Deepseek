@@ -10,6 +10,7 @@
     "./commands/setup.md",
     "./commands/configure.md"
   ],
+  "hooks": "./hooks/hooks.json",
   "homepage": "https://github.com/jarrodwatts/claude-hud",
   "repository": "https://github.com/jarrodwatts/claude-hud",
   "license": "MIT",
