@@ -40,16 +40,18 @@ if [ -f "$session_cache_file" ]; then
   fi
 fi
 
+# 后台异步刷新缓存，避免阻塞 statusline（better-ccusage 调用约 8s，同步会触发 Claude Code 超时）
 if [ "$needs_refresh" -eq 1 ]; then
-  $BETTER_CCUSAGE session --json 2>/dev/null > "$session_cache_file.tmp" 2>/dev/null
-  if [ -s "$session_cache_file.tmp" ]; then
-    mv "$session_cache_file.tmp" "$session_cache_file"
-  fi
-  # Also refresh blocks for time remaining
-  $BETTER_CCUSAGE blocks --json 2>/dev/null > "$blocks_cache_file.tmp" 2>/dev/null
-  if [ -s "$blocks_cache_file.tmp" ]; then
-    mv "$blocks_cache_file.tmp" "$blocks_cache_file"
-  fi
+  (
+    $BETTER_CCUSAGE session --json 2>/dev/null > "$session_cache_file.tmp" 2>/dev/null
+    if [ -s "$session_cache_file.tmp" ]; then
+      mv "$session_cache_file.tmp" "$session_cache_file"
+    fi
+    $BETTER_CCUSAGE blocks --json 2>/dev/null > "$blocks_cache_file.tmp" 2>/dev/null
+    if [ -s "$blocks_cache_file.tmp" ]; then
+      mv "$blocks_cache_file.tmp" "$blocks_cache_file"
+    fi
+  ) &
 fi
 
 cost_line1=""
