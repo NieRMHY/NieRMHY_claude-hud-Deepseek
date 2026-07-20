@@ -1,6 +1,6 @@
 {
-  "name": "claude-hud",
-  "description": "Real-time statusline HUD for Claude Code - context health, tool activity, agent tracking, and todo progress",
+  "name": "claude-hud-mhy",
+  "description": "Real-time statusline HUD for Claude Code - context health, tool activity, agent tracking, and todo progress (fork with SessionStart hook for CC-switch compatibility)",
   "version": "0.5.1",
   "author": {
     "name": "Jarrod Watts",
@@ -10,6 +10,7 @@
     "./commands/setup.md",
     "./commands/configure.md"
   ],
+  "hooks": "./hooks/hooks.json",
   "homepage": "https://github.com/jarrodwatts/claude-hud",
   "repository": "https://github.com/jarrodwatts/claude-hud",
   "license": "MIT",
