@@ -198,7 +198,7 @@ Claude Code → stdin JSON → claude-hud → stdout → 在终端中显示
 | `display.showResetLabel` | boolean | true | 在使用率倒计时前显示 `resets in` 前缀 |
 | `display.timeFormat` | `relative` \| `absolute` \| `both` \| `elapsed` \| `elapsedAndAbsolute` | `relative` | 控制使用率窗口时间的显示方式：仅倒计时（`resets in 2h 30m`）、墙钟重置时间（`resets at 14:30`）、两者同时显示、窗口已过百分比（`53% elapsed`），或已过百分比加墙钟重置时间 |
 | `display.sevenDayThreshold` | 0-100 | 80 | 当 7 天使用率 ≥ 阈值时显示（0 = 始终显示） |
-| `display.externalUsagePath` | string | `""` | 可选的本地使用率快照文件路径，仅在 stdin `rate_limits` 缺失时使用 |
+| `display.externalUsagePath` | string | `""` | 可选的本地使用率快照文件路径。stdin `rate_limits` 存在时会附加 `balance_label`，并在 stdin 缺少 `model_scoped` 窗口时用快照补齐；stdin 窗口缺失时可整体作为回退 |
 | `display.externalUsageWritePath` | string | `""` | 可选的绝对 `.json` 路径，父目录必须已存在。当 stdin `rate_limits` 存在时，ClaudeHUD 会写入私有权限快照供其他本地工具读取。相对路径、非 json 文件和缺失父目录会被忽略 |
 | `display.externalUsageFreshnessMs` | number | `300000` | 外部使用率快照允许的最长存活时间，超时后会被忽略 |
 | `display.showTokenBreakdown` | boolean | true | 在高上下文时（85%+）显示 Token 详情 |
@@ -249,7 +249,20 @@ Claude Code → stdin JSON → claude-hud → stdout → 在终端中显示
 
 ClaudeHUD 优先使用官方 statusline stdin 负载中的使用率数据。如果 `rate_limits` 缺失，你可以通过 `display.externalUsagePath` 显式启用本地 sidecar 快照回退，例如让代理程序写入 JSON 文件。只要 stdin 和 sidecar 同时存在，stdin 始终优先。
 
-回退快照必须足够新（由 `display.externalUsageFreshnessMs` 控制），并且包含有效的 `updated_at`、以及 `five_hour` 窗口、`seven_day` 窗口或 `balance_label`。`balance_label` 是预付费提供商余额的可选文本；显示前会进行裁剪、长度限制和清理。非法 JSON、过期文件或非法时间戳都会被静默忽略。
+回退快照必须足够新（由 `display.externalUsageFreshnessMs` 控制），并且包含有效的 `updated_at`、以及 `five_hour` 窗口、`seven_day` 窗口、`balance_label` 或 `model_scoped` 数组。`balance_label` 是预付费提供商余额的可选文本；显示前会进行裁剪、长度限制和清理。非法 JSON、过期文件或非法时间戳都会被静默忽略。
+
+快照还可以携带 `model_scoped` 窗口，格式与 Claude Code 为 stdin 定义的 schema 相同（`display_name`、0-100 的 `utilization`、ISO 格式 `resets_at`），渲染方式与 stdin 提供的按模型窗口完全一致，且 stdin 自带 `model_scoped` 数据时始终优先。借此本地喂送程序可以显示 statusline 负载暂未包含的按模型每周配额（例如 Fable）：
+
+```json
+{
+  "updated_at": "2026-07-24T14:12:37Z",
+  "model_scoped": [
+    { "display_name": "Fable", "utilization": 89, "resets_at": "2026-07-27T11:00:00Z" }
+  ]
+}
+```
+
+生成此类快照的一种零凭证方式是 Claude Code 自带的 `get_usage` 控制请求：它会返回 `rate_limits.model_scoped` 且不消耗任何 token，定时任务可将其经 `jq` 写入快照文件。HUD 本身从不发起任何请求，只读取该文件。
 
 如果希望 ClaudeHUD 将官方 stdin `rate_limits` 写入本地快照供其他工具使用，可设置 `display.externalUsageWritePath`。该路径必须为绝对路径、以 `.json` 结尾，并位于已存在的目录中。ClaudeHUD 会使用私有权限写入该文件，并静默忽略无效路径。
 
