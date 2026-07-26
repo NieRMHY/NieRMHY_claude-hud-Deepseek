@@ -24,6 +24,8 @@ export type GitBranchOverflowMode = 'truncate' | 'wrap';
 export type ModelFormatMode = 'full' | 'compact' | 'short';
 export type TimeFormatMode = 'relative' | 'absolute' | 'both' | 'elapsed' | 'elapsedAndAbsolute';
 export type CustomLinePosition = 'first' | 'last';
+// Hour cycle for wall-clock time display; 'auto' defers to the system locale.
+export type HourCycleMode = 'auto' | 'h11' | 'h12' | 'h23' | 'h24';
 
 /**
  * Controls how many directory segments of cwd are shown in the project badge.
@@ -245,6 +247,8 @@ export interface HudConfig {
     customLine: string;
     customLinePosition: CustomLinePosition;
     timeFormat: TimeFormatMode;
+    hourCycle: HourCycleMode;
+    showClockSeconds: boolean;
     // Show the advisor model when `/advisor` is configured for the session.
     // The model ID is read from the transcript (see TranscriptData.advisorModel)
     // so it reflects the actual current choice, not a global default.
@@ -338,6 +342,8 @@ export const DEFAULT_CONFIG: HudConfig = {
     customLine: '',
     customLinePosition: 'last',
     timeFormat: 'relative',
+    hourCycle: 'auto',
+    showClockSeconds: false,
     showAdvisor: false,
     advisorOverride: '',
     autoCompactWindow: null,
@@ -406,6 +412,10 @@ function validateTimeFormat(value: unknown): value is TimeFormatMode {
 
 function validateCustomLinePosition(value: unknown): value is CustomLinePosition {
   return value === 'first' || value === 'last';
+}
+
+function validateHourCycle(value: unknown): value is HourCycleMode {
+  return value === 'auto' || value === 'h11' || value === 'h12' || value === 'h23' || value === 'h24';
 }
 
 function validateColorName(value: unknown): value is HudColorName {
@@ -854,6 +864,12 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     timeFormat: validateTimeFormat(migrated.display?.timeFormat)
       ? migrated.display.timeFormat
       : DEFAULT_CONFIG.display.timeFormat,
+    hourCycle: validateHourCycle(migrated.display?.hourCycle)
+      ? migrated.display.hourCycle
+      : DEFAULT_CONFIG.display.hourCycle,
+    showClockSeconds: typeof migrated.display?.showClockSeconds === 'boolean'
+      ? migrated.display.showClockSeconds
+      : DEFAULT_CONFIG.display.showClockSeconds,
     showAdvisor: typeof migrated.display?.showAdvisor === 'boolean'
       ? migrated.display.showAdvisor
       : DEFAULT_CONFIG.display.showAdvisor,
