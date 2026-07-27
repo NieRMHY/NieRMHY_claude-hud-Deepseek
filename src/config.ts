@@ -216,6 +216,10 @@ export interface HudConfig {
     // occurred this session, counted from transcript compact_boundary entries.
     showCompactions: boolean;
     mergeGroups: HudElement[][];
+    // Elements that are pushed to the right edge of a combined merge-group
+    // line. Only applies when the group actually renders on one line and the
+    // terminal width is known; otherwise the normal separator join is used.
+    rightAlign: HudElement[];
     autocompactBuffer: AutocompactBufferMode;
     contextWarningThreshold: number;
     contextCriticalThreshold: number;
@@ -321,6 +325,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showLastResponseAt: false,
     showCompactions: false,
     mergeGroups: DEFAULT_MERGE_GROUPS.map(group => [...group]),
+    rightAlign: [],
     autocompactBuffer: 'enabled',
     contextWarningThreshold: 70,
     contextCriticalThreshold: 85,
@@ -493,6 +498,31 @@ function validateProjectLineOrder(value: unknown): FirstLineSegment[] {
   }
 
   return order;
+}
+
+function validateRightAlign(value: unknown): HudElement[] {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_CONFIG.display.rightAlign];
+  }
+
+  const seen = new Set<HudElement>();
+  const elements: HudElement[] = [];
+
+  for (const item of value) {
+    if (typeof item !== 'string' || !KNOWN_ELEMENTS.has(item as HudElement)) {
+      continue;
+    }
+
+    const element = item as HudElement;
+    if (seen.has(element)) {
+      continue;
+    }
+
+    seen.add(element);
+    elements.push(element);
+  }
+
+  return elements;
 }
 
 function validateMergeGroups(value: unknown): HudElement[][] {
@@ -804,6 +834,7 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
       ? migrated.display.showCompactions
       : DEFAULT_CONFIG.display.showCompactions,
     mergeGroups: validateMergeGroups(migrated.display?.mergeGroups),
+    rightAlign: validateRightAlign(migrated.display?.rightAlign),
     autocompactBuffer: validateAutocompactBuffer(migrated.display?.autocompactBuffer)
       ? migrated.display.autocompactBuffer
       : DEFAULT_CONFIG.display.autocompactBuffer,
