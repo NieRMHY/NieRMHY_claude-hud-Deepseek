@@ -103,6 +103,52 @@ test('estimateSessionCost prices enterprise plan aliases', () => {
   assert.equal(haikuPlan.outputUsd, 4);
 });
 
+test('estimateSessionCost prices the Claude 5 family', () => {
+  const tokens = { inputTokens: 1000000, outputTokens: 1000000, cacheCreationTokens: 0, cacheReadTokens: 0 };
+
+  const opus5 = estimateSessionCost({ model: { display_name: 'Opus 5' } }, tokens);
+  assert.ok(opus5);
+  assert.equal(opus5.inputUsd, 5);
+  assert.equal(opus5.outputUsd, 25);
+
+  const sonnet5 = estimateSessionCost({ model: { display_name: 'Sonnet 5' } }, tokens);
+  assert.ok(sonnet5);
+  assert.equal(sonnet5.inputUsd, 2);
+  assert.equal(sonnet5.outputUsd, 10);
+
+  const fable5 = estimateSessionCost({ model: { display_name: 'Fable 5' } }, tokens);
+  assert.ok(fable5);
+  assert.equal(fable5.inputUsd, 10);
+  assert.equal(fable5.outputUsd, 50);
+});
+
+test('estimateSessionCost prices Claude 5 ids carrying a context-window suffix', () => {
+  const tokens = { inputTokens: 1000000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 };
+
+  const fromDisplayName = estimateSessionCost(
+    { model: { display_name: 'Opus 5 (1M context)', id: 'claude-opus-5[1m]' } },
+    tokens,
+  );
+  assert.ok(fromDisplayName);
+  assert.equal(fromDisplayName.inputUsd, 5);
+
+  const fromId = estimateSessionCost({ model: { display_name: 'Unknown', id: 'claude-opus-5[1m]' } }, tokens);
+  assert.ok(fromId);
+  assert.equal(fromId.inputUsd, 5);
+});
+
+test('estimateSessionCost prices Claude 5 point releases like their base model', () => {
+  const tokens = { inputTokens: 1000000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 };
+
+  const opus51 = estimateSessionCost({ model: { display_name: 'Opus 5.1' } }, tokens);
+  assert.ok(opus51);
+  assert.equal(opus51.inputUsd, 5);
+
+  const sonnet51 = estimateSessionCost({ model: { display_name: 'Sonnet 5.1' } }, tokens);
+  assert.ok(sonnet51);
+  assert.equal(sonnet51.inputUsd, 2);
+});
+
 test('estimateSessionCost prices Sonnet 3.7', () => {
   const tokens = { inputTokens: 1000000, outputTokens: 1000000, cacheCreationTokens: 0, cacheReadTokens: 0 };
   const result = estimateSessionCost({ model: { display_name: 'Claude Sonnet 3.7' } }, tokens);

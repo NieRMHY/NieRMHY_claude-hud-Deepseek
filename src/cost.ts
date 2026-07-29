@@ -27,13 +27,16 @@ const CACHE_READ_MULTIPLIER = 0.1;
 // model lines (Haiku 4.x differs from Haiku 3.5) must come before any broader
 // fallback patterns to avoid silent under-pricing.
 const ANTHROPIC_MODEL_PRICING: Array<{ pattern: RegExp; pricing: ModelPricing }> = [
+  { pattern: /\bopus 5(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 5, outputUsdPerMillion: 25 } },
   { pattern: /\bopus 4 (?:[5-9]|\d{2,})\b/i, pricing: { inputUsdPerMillion: 5, outputUsdPerMillion: 25 } },
   { pattern: /\bopus 4(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 15, outputUsdPerMillion: 75 } },
+  { pattern: /\bsonnet 5(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 2, outputUsdPerMillion: 10 } },
   { pattern: /\bsonnet 4(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15 } },
   { pattern: /\bsonnet 3 7\b/i, pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15 } },
   { pattern: /\bsonnet 3 5\b/i, pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15 } },
   { pattern: /\bhaiku 4(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 5 } },
   { pattern: /\bhaiku 3 5\b/i, pricing: { inputUsdPerMillion: 0.8, outputUsdPerMillion: 4 } },
+  { pattern: /\bfable 5(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 10, outputUsdPerMillion: 50 } },
   // Enterprise plan aliases (e.g. opusplan, sonnetplan, haikuplan)
   { pattern: /\bopusplan\b/i, pricing: { inputUsdPerMillion: 15, outputUsdPerMillion: 75 } },
   { pattern: /\bsonnetplan\b/i, pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15 } },
