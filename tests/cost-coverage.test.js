@@ -76,6 +76,44 @@ test('estimateSessionCost calculates cache costs correctly', () => {
   assert.ok(Math.abs(result.totalUsd - 4.05) < 1e-10);
 });
 
+test('estimateSessionCost applies MiniMax-M3 pricing without a cache write charge', () => {
+  const result = estimateSessionCost(
+    { model: { display_name: 'MiniMax-M3' } },
+    {
+      inputTokens: 1_000_000,
+      cacheCreationTokens: 1_000_000,
+      cacheReadTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    },
+  );
+
+  assert.ok(result);
+  assert.equal(result.inputUsd, 0.6);
+  assert.equal(result.cacheCreationUsd, 0);
+  assert.equal(result.cacheReadUsd, 0.12);
+  assert.equal(result.outputUsd, 2.4);
+  assert.equal(result.totalUsd, 3.12);
+});
+
+test('estimateSessionCost applies MiniMax-M2.7 cache pricing from the model parameters', () => {
+  const result = estimateSessionCost(
+    { model: { id: 'MiniMax-M2.7' } },
+    {
+      inputTokens: 1_000_000,
+      cacheCreationTokens: 1_000_000,
+      cacheReadTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    },
+  );
+
+  assert.ok(result);
+  assert.equal(result.inputUsd, 0.3);
+  assert.equal(result.cacheCreationUsd, 0.375);
+  assert.equal(result.cacheReadUsd, 0.06);
+  assert.equal(result.outputUsd, 1.2);
+  assert.ok(Math.abs(result.totalUsd - 1.935) < 1e-12);
+});
+
 test('estimateSessionCost matches model from id when display_name fails', () => {
   const tokens = { inputTokens: 1000000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 };
   const result = estimateSessionCost({ model: { display_name: 'Unknown', id: 'claude-sonnet-3.5-20241022' } }, tokens);
