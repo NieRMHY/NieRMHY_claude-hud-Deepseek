@@ -141,3 +141,109 @@ test('formatAuthSegment joins method and truncated user', () => {
   assert.equal(formatAuthSegment(info, { showAuth: false, showAuthUser: false }), null);
   assert.equal(formatAuthSegment(null, { showAuth: true, showAuthUser: true }), null);
 });
+
+// --- derived-auth caching -------------------------------------------------
+// claude.json is the user's entire CLI config and grows with project history.
+// The status line runs on every interaction, so an uncached parse is paid per
+// tick. These tests exist because a cache that silently does nothing is still
+// CORRECT, just slow -- a performance property with no test regresses unnoticed.
+
+test('readAuthInfo caches derived auth and serves it on an unchanged file', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hud-auth-cache-'));
+  const configDir = path.join(dir, '.claude');
+  const original = process.env.CLAUDE_CONFIG_DIR;
+  const originalKey = process.env.ANTHROPIC_API_KEY;
+  const fsSync = await import('node:fs');
+
+  try {
+    delete process.env.ANTHROPIC_API_KEY;   // force the file path
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    fsSync.mkdirSync(configDir, { recursive: true });
+    const jsonPath = `${configDir}.json`;
+    await writeFile(jsonPath, JSON.stringify(MAX_ACCOUNT), 'utf8');
+
+    assert.deepEqual(readAuthInfo(), { method: 'Claude Max 20x', user: 'someone.long' });
+
+    const cacheFile = path.join(configDir, 'plugins', 'claude-hud', 'auth-cache', 'auth.json');
+    assert.ok(fsSync.existsSync(cacheFile), 'first read must write a cache entry');
+
+    // Prove the CACHED path is taken without depending on timestamp precision
+    // (utimes cannot faithfully restore sub-millisecond mtime on APFS, which
+    // would bust the key for the wrong reason). Make the source unreadable:
+    // statSync still succeeds, so a HIT returns the stored value while a
+    // re-parse would hit EACCES and fall through to EMPTY_AUTH_INFO.
+    fsSync.chmodSync(jsonPath, 0o000);
+    let unreadable = true;
+    try { fsSync.readFileSync(jsonPath, 'utf-8'); unreadable = false; } catch { /* expected */ }
+    if (unreadable) {
+      assert.deepEqual(readAuthInfo(), { method: 'Claude Max 20x', user: 'someone.long' },
+        'an unchanged (mtime,size) must serve the CACHED value');
+    }
+    fsSync.chmodSync(jsonPath, 0o600);
+  } finally {
+    restoreEnvVar('CLAUDE_CONFIG_DIR', original);
+    restoreEnvVar('ANTHROPIC_API_KEY', originalKey);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readAuthInfo re-parses when claude.json actually changes', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hud-auth-bust-'));
+  const configDir = path.join(dir, '.claude');
+  const original = process.env.CLAUDE_CONFIG_DIR;
+  const originalKey = process.env.ANTHROPIC_API_KEY;
+  const fsSync = await import('node:fs');
+
+  try {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    fsSync.mkdirSync(configDir, { recursive: true });
+    const jsonPath = `${configDir}.json`;
+    await writeFile(jsonPath, JSON.stringify(MAX_ACCOUNT), 'utf8');
+    assert.equal(readAuthInfo().user, 'someone.long');
+
+    await writeFile(jsonPath, JSON.stringify({
+      oauthAccount: { emailAddress: 'other@example.com', organizationType: 'claude_pro' },
+    }), 'utf8');
+    const future = new Date(Date.now() + 5000);
+    fsSync.utimesSync(jsonPath, future, future);
+
+    assert.equal(readAuthInfo().user, 'other', 'a changed file must bust the cache');
+  } finally {
+    restoreEnvVar('CLAUDE_CONFIG_DIR', original);
+    restoreEnvVar('ANTHROPIC_API_KEY', originalKey);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Size is in the key alongside mtime because two writes can land in the same
+// millisecond. Hard to provoke by racing the clock, so the entry is forged.
+test('readAuthInfo busts the cache when only the SIZE differs', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hud-auth-size-'));
+  const configDir = path.join(dir, '.claude');
+  const original = process.env.CLAUDE_CONFIG_DIR;
+  const originalKey = process.env.ANTHROPIC_API_KEY;
+  const fsSync = await import('node:fs');
+
+  try {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    fsSync.mkdirSync(configDir, { recursive: true });
+    const jsonPath = `${configDir}.json`;
+    await writeFile(jsonPath, JSON.stringify(MAX_ACCOUNT), 'utf8');
+    assert.equal(readAuthInfo().user, 'someone.long', 'seed the cache');
+
+    const cacheFile = path.join(configDir, 'plugins', 'claude-hud', 'auth-cache', 'auth.json');
+    const stat = fsSync.statSync(jsonPath);
+    fsSync.writeFileSync(cacheFile, JSON.stringify({
+      mtimeMs: stat.mtimeMs, size: stat.size + 1, method: 'STALE', user: 'stale-user',
+    }), 'utf8');
+
+    assert.equal(readAuthInfo().user, 'someone.long',
+      'a size mismatch must bust the cache and re-parse');
+  } finally {
+    restoreEnvVar('CLAUDE_CONFIG_DIR', original);
+    restoreEnvVar('ANTHROPIC_API_KEY', originalKey);
+    await rm(dir, { recursive: true, force: true });
+  }
+});

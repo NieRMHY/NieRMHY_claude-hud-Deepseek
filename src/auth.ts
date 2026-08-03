@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { getClaudeConfigJsonPath } from './claude-config-dir.js';
+import * as path from 'node:path';
+import { getClaudeConfigJsonPath, getHudPluginDir } from './claude-config-dir.js';
 import { sanitizeDisplayText } from './utils/sanitize.js';
 
 /**
@@ -98,16 +99,95 @@ export function deriveAuthInfo(claudeJson: unknown, env: NodeJS.ProcessEnv = pro
 }
 
 /** Reads auth info for the current login. Never throws. */
+/**
+ * Cache of the two DERIVED fields, keyed on the source file's identity.
+ *
+ * Both mtime and size are compared: two writes can land inside the same
+ * millisecond, and mtime alone would then serve a stale entry.
+ */
+interface AuthCacheEntry {
+  mtimeMs: number;
+  size: number;
+  method: string | null;
+  user: string | null;
+}
+
+function authCachePath(homeDir: string): string {
+  return path.join(getHudPluginDir(homeDir), AUTH_CACHE_DIRNAME, 'auth.json');
+}
+
+const AUTH_CACHE_DIRNAME = 'auth-cache';
+
+function readAuthCache(homeDir: string): AuthCacheEntry | null {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(authCachePath(homeDir), 'utf-8'));
+    if (
+      parsed == null || typeof parsed !== 'object'
+      || typeof (parsed as AuthCacheEntry).mtimeMs !== 'number'
+      || typeof (parsed as AuthCacheEntry).size !== 'number'
+    ) {
+      return null;
+    }
+    return parsed as AuthCacheEntry;
+  } catch {
+    return null;
+  }
+}
+
+function writeAuthCache(homeDir: string, entry: AuthCacheEntry): void {
+  try {
+    const cachePath = authCachePath(homeDir);
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    // Write-then-rename: the status line can run concurrently across sessions,
+    // and a torn read would just miss the cache, but a torn WRITE would persist.
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(entry), 'utf-8');
+    fs.renameSync(tmpPath, cachePath);
+  } catch {
+    // A cache write must never break the status line.
+  }
+}
+
+/**
+ * Reads auth info for the current login. Never throws.
+ *
+ * claude.json is the user's entire CLI config and grows with project history —
+ * 73 KB on the host this was measured on. The status line runs on every
+ * interaction, so parsing it per tick is not free. The two derived fields are
+ * cached against the file's (mtimeMs, size) instead, making the steady-state
+ * cost a stat plus a ~100-byte read.
+ */
 export function readAuthInfo(): AuthInfo {
   // Avoid reading a stale OAuth profile when the active source is an API key.
   if (hasApiKey(process.env)) {
     return API_KEY_AUTH_INFO;
   }
 
+  const homeDir = os.homedir();
+  const configJsonPath = getClaudeConfigJsonPath(homeDir);
+
+  let stat: fs.Stats;
   try {
-    const configJsonPath = getClaudeConfigJsonPath(os.homedir());
+    stat = fs.statSync(configJsonPath);
+  } catch {
+    return EMPTY_AUTH_INFO;
+  }
+
+  const cached = readAuthCache(homeDir);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return { method: cached.method, user: cached.user };
+  }
+
+  try {
     const content = fs.readFileSync(configJsonPath, 'utf-8');
-    return deriveAuthInfo(JSON.parse(content));
+    const info = deriveAuthInfo(JSON.parse(content));
+    writeAuthCache(homeDir, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      method: info.method,
+      user: info.user,
+    });
+    return info;
   } catch {
     return EMPTY_AUTH_INFO;
   }
