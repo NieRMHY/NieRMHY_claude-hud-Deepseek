@@ -1032,6 +1032,10 @@ test('mergeConfig defaults rightAlign to empty', () => {
   assert.deepEqual(DEFAULT_CONFIG.display.rightAlign, []);
 });
 
+test('mergeConfig caps maxWidth to a safe terminal width', () => {
+  assert.equal(mergeConfig({ maxWidth: 600_000_000 }).maxWidth, 1000);
+});
+
 test('mergeConfig accepts valid rightAlign entries and filters invalid ones', () => {
   const config = mergeConfig({
     display: {

@@ -345,8 +345,8 @@ function collectMergeSequence(
   return sequence;
 }
 
-// Push the configured elements of a combined merge-group row to the right
-// edge, padding the gap with spaces. Returns null when right-alignment does
+// Treat the first configured element as the start of an order-preserving
+// right zone, padding the gap before it with spaces. Returns null when alignment does
 // not apply — no configured elements on either side, or not enough room for
 // at least one space between the two halves — so the caller falls back to the
 // normal separator join.
@@ -359,8 +359,13 @@ function alignGroupRight(
     return null;
   }
 
-  const leftEntries = entries.filter(({ element }) => !rightAlign.has(element));
-  const rightEntries = entries.filter(({ element }) => rightAlign.has(element));
+  const splitIndex = entries.findIndex(({ element }) => rightAlign.has(element));
+  if (splitIndex <= 0) {
+    return null;
+  }
+
+  const leftEntries = entries.slice(0, splitIndex);
+  const rightEntries = entries.slice(splitIndex);
 
   if (leftEntries.length === 0 || rightEntries.length === 0) {
     return null;

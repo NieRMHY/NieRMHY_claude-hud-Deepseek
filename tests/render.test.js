@@ -4021,6 +4021,18 @@ test('render expanded layout right-aligns configured merge-group elements to the
   assert.match(row, / {2,}Context/, `right half should be padded away from the left half, got: ${row}`);
 });
 
+test('render expanded layout treats a middle right-align entry as an ordered suffix anchor', () => {
+  const ctx = rightAlignContext();
+  ctx.config.display.rightAlign = ['context'];
+
+  const lines = withTerminal(120, () => captureRenderLines(ctx));
+  const row = lines.find(line => line.includes('Context') && line.includes('Usage'));
+
+  assert.ok(row, 'expected a combined project/context/usage row');
+  assert.ok(row.indexOf('Context') < row.indexOf('Usage'), `element order must be preserved: ${row}`);
+  assert.equal([...row].length, 120, `row should fill the terminal width, got: ${row}`);
+});
+
 test('render expanded layout keeps the separator join when no element is right-aligned', () => {
   const ctx = rightAlignContext();
 

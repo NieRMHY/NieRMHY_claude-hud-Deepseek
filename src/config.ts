@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import { getHudPluginDir } from './claude-config-dir.js';
 import { createDebug } from './debug.js';
 import type { Language } from './i18n/types.js';
+import { MAX_TERMINAL_WIDTH } from './utils/terminal.js';
 
 const debug = createDebug('config');
 
@@ -683,7 +684,7 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
 
   const rawMaxWidth = (migrated as Record<string, unknown>).maxWidth;
   const maxWidth = (typeof rawMaxWidth === 'number' && Number.isFinite(rawMaxWidth) && rawMaxWidth > 0)
-    ? Math.floor(rawMaxWidth)
+    ? Math.min(Math.floor(rawMaxWidth), MAX_TERMINAL_WIDTH)
     : null;
 
   const elementOrder = validateElementOrder(migrated.elementOrder);
