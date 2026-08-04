@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { getClaudeConfigJsonPath, getHudPluginDir } from './claude-config-dir.js';
 import { sanitizeDisplayText } from './utils/sanitize.js';
 
@@ -18,6 +19,7 @@ export interface AuthInfo {
 
 const EMPTY_AUTH_INFO: AuthInfo = { method: null, user: null };
 const API_KEY_AUTH_INFO: AuthInfo = { method: 'API Key', user: null };
+const AUTH_VALUE_MAX_LEN = 128;
 
 function hasApiKey(env: NodeJS.ProcessEnv): boolean {
   return typeof env.ANTHROPIC_API_KEY === 'string' && env.ANTHROPIC_API_KEY.trim().length > 0;
@@ -26,7 +28,7 @@ function hasApiKey(env: NodeJS.ProcessEnv): boolean {
 // Strip ANSI sequences and control/bidi characters so values from
 // claude.json can never smuggle escape sequences into the terminal.
 function sanitizeValue(value: string): string {
-  return sanitizeDisplayText(value).trim();
+  return sanitizeDisplayText(value).trim().slice(0, AUTH_VALUE_MAX_LEN);
 }
 
 function readString(obj: Record<string, unknown>, key: string): string | null {
@@ -98,7 +100,6 @@ export function deriveAuthInfo(claudeJson: unknown, env: NodeJS.ProcessEnv = pro
   return { method, user };
 }
 
-/** Reads auth info for the current login. Never throws. */
 /**
  * Cache of the two DERIVED fields, keyed on the source file's identity.
  *
@@ -106,8 +107,12 @@ export function deriveAuthInfo(claudeJson: unknown, env: NodeJS.ProcessEnv = pro
  * millisecond, and mtime alone would then serve a stale entry.
  */
 interface AuthCacheEntry {
+  version: number;
   mtimeMs: number;
+  ctimeMs: number;
   size: number;
+  dev: number;
+  ino: number;
   method: string | null;
   user: string | null;
 }
@@ -117,34 +122,87 @@ function authCachePath(homeDir: string): string {
 }
 
 const AUTH_CACHE_DIRNAME = 'auth-cache';
+const AUTH_CACHE_VERSION = 1;
+const AUTH_CACHE_MAX_BYTES = 4096;
+
+function normalizeCachedValue(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== 'string' || value.length === 0 || value.length > AUTH_VALUE_MAX_LEN) {
+    return undefined;
+  }
+  return sanitizeValue(value) === value ? value : undefined;
+}
 
 function readAuthCache(homeDir: string): AuthCacheEntry | null {
+  let fd: number | undefined;
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(authCachePath(homeDir), 'utf-8'));
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    fd = fs.openSync(authCachePath(homeDir), flags);
+    const cacheStat = fs.fstatSync(fd);
+    if (!cacheStat.isFile() || cacheStat.size <= 0 || cacheStat.size > AUTH_CACHE_MAX_BYTES) {
+      return null;
+    }
+
+    const parsed: unknown = JSON.parse(fs.readFileSync(fd, 'utf-8'));
+    const method = parsed && typeof parsed === 'object'
+      ? normalizeCachedValue((parsed as Record<string, unknown>).method)
+      : undefined;
+    const user = parsed && typeof parsed === 'object'
+      ? normalizeCachedValue((parsed as Record<string, unknown>).user)
+      : undefined;
     if (
       parsed == null || typeof parsed !== 'object'
+      || (parsed as AuthCacheEntry).version !== AUTH_CACHE_VERSION
       || typeof (parsed as AuthCacheEntry).mtimeMs !== 'number'
+      || typeof (parsed as AuthCacheEntry).ctimeMs !== 'number'
       || typeof (parsed as AuthCacheEntry).size !== 'number'
+      || typeof (parsed as AuthCacheEntry).dev !== 'number'
+      || typeof (parsed as AuthCacheEntry).ino !== 'number'
+      || method === undefined
+      || user === undefined
     ) {
       return null;
     }
-    return parsed as AuthCacheEntry;
+    return { ...(parsed as AuthCacheEntry), method, user };
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* best effort */ }
+    }
   }
 }
 
 function writeAuthCache(homeDir: string, entry: AuthCacheEntry): void {
+  let tmpPath: string | undefined;
+  let fd: number | undefined;
   try {
     const cachePath = authCachePath(homeDir);
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const cacheDir = path.dirname(cachePath);
+    fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+    const dirStat = fs.lstatSync(cacheDir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return;
+    try { fs.chmodSync(cacheDir, 0o700); } catch { /* best effort */ }
+
     // Write-then-rename: the status line can run concurrently across sessions,
     // and a torn read would just miss the cache, but a torn WRITE would persist.
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(entry), 'utf-8');
+    tmpPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
+    fd = fs.openSync(tmpPath, 'wx', 0o600);
+    fs.writeFileSync(fd, JSON.stringify(entry), 'utf-8');
+    fs.closeSync(fd);
+    fd = undefined;
     fs.renameSync(tmpPath, cachePath);
+    tmpPath = undefined;
+    try { fs.chmodSync(cachePath, 0o600); } catch { /* best effort */ }
   } catch {
     // A cache write must never break the status line.
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* best effort */ }
+    }
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    }
   }
 }
 
@@ -174,7 +232,14 @@ export function readAuthInfo(): AuthInfo {
   }
 
   const cached = readAuthCache(homeDir);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  if (
+    cached
+    && cached.mtimeMs === stat.mtimeMs
+    && cached.ctimeMs === stat.ctimeMs
+    && cached.size === stat.size
+    && cached.dev === stat.dev
+    && cached.ino === stat.ino
+  ) {
     return { method: cached.method, user: cached.user };
   }
 
@@ -182,8 +247,12 @@ export function readAuthInfo(): AuthInfo {
     const content = fs.readFileSync(configJsonPath, 'utf-8');
     const info = deriveAuthInfo(JSON.parse(content));
     writeAuthCache(homeDir, {
+      version: AUTH_CACHE_VERSION,
       mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
       size: stat.size,
+      dev: stat.dev,
+      ino: stat.ino,
       method: info.method,
       user: info.user,
     });
