@@ -361,8 +361,9 @@ export function getUsageFromStdin(stdin: StdinData): UsageData | null {
 
   const fiveHour = parseRateLimitPercent(rateLimits.five_hour?.used_percentage);
   const sevenDay = parseRateLimitPercent(rateLimits.seven_day?.used_percentage);
+  const hasScopedWindows = Array.isArray(rateLimits.model_scoped);
   const scopedWindows = parseScopedWindows(rateLimits.model_scoped);
-  if (fiveHour === null && sevenDay === null && scopedWindows.length === 0) {
+  if (fiveHour === null && sevenDay === null && !hasScopedWindows) {
     return null;
   }
 
@@ -371,7 +372,7 @@ export function getUsageFromStdin(stdin: StdinData): UsageData | null {
     sevenDay,
     fiveHourResetAt: parseRateLimitResetAt(rateLimits.five_hour?.resets_at),
     sevenDayResetAt: parseRateLimitResetAt(rateLimits.seven_day?.resets_at),
-    ...(scopedWindows.length > 0 && { scopedWindows }),
+    ...(hasScopedWindows && { scopedWindows }),
   };
 }
 
@@ -381,7 +382,7 @@ export function getUsageFromStdin(stdin: StdinData): UsageData | null {
  * the generic rate-limit windows. Malformed entries are dropped, and both the
  * retained entry count and label size are bounded because stdin is untrusted.
  */
-function parseScopedWindows(modelScoped: unknown): ScopedUsageWindow[] {
+export function parseScopedWindows(modelScoped: unknown): ScopedUsageWindow[] {
   if (!Array.isArray(modelScoped)) {
     return [];
   }
