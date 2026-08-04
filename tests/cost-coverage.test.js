@@ -149,6 +149,19 @@ test('estimateSessionCost prices Claude 5 point releases like their base model',
   assert.equal(sonnet51.inputUsd, 2);
 });
 
+test('estimateSessionCost ends Sonnet 5 introductory pricing on September 1, 2026 UTC', () => {
+  const tokens = { inputTokens: 1000000, outputTokens: 1000000, cacheCreationTokens: 0, cacheReadTokens: 0 };
+  const stdin = { model: { display_name: 'Sonnet 5' } };
+
+  const august31 = estimateSessionCost(stdin, tokens, { now: new Date('2026-08-31T23:59:59.999Z') });
+  assert.equal(august31?.inputUsd, 2);
+  assert.equal(august31?.outputUsd, 10);
+
+  const september1 = estimateSessionCost(stdin, tokens, { now: new Date('2026-09-01T00:00:00.000Z') });
+  assert.equal(september1?.inputUsd, 3);
+  assert.equal(september1?.outputUsd, 15);
+});
+
 test('estimateSessionCost prices Sonnet 3.7', () => {
   const tokens = { inputTokens: 1000000, outputTokens: 1000000, cacheCreationTokens: 0, cacheReadTokens: 0 };
   const result = estimateSessionCost({ model: { display_name: 'Claude Sonnet 3.7' } }, tokens);

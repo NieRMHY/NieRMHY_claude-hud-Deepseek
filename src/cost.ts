@@ -22,6 +22,8 @@ export interface SessionCostDisplay {
 const TOKENS_PER_MILLION = 1_000_000;
 const CACHE_WRITE_MULTIPLIER = 1.25;
 const CACHE_READ_MULTIPLIER = 0.1;
+const SONNET_5_PROMO_END_MS = Date.UTC(2026, 8, 1);
+const SONNET_5_PATTERN = /\bsonnet 5(?: \d+)?\b/i;
 
 // Patterns are tried in order; the first match wins. Families with more specific
 // model lines (Haiku 4.x differs from Haiku 3.5) must come before any broader
@@ -30,7 +32,6 @@ const ANTHROPIC_MODEL_PRICING: Array<{ pattern: RegExp; pricing: ModelPricing }>
   { pattern: /\bopus 5(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 5, outputUsdPerMillion: 25 } },
   { pattern: /\bopus 4 (?:[5-9]|\d{2,})\b/i, pricing: { inputUsdPerMillion: 5, outputUsdPerMillion: 25 } },
   { pattern: /\bopus 4(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 15, outputUsdPerMillion: 75 } },
-  { pattern: /\bsonnet 5(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 2, outputUsdPerMillion: 10 } },
   { pattern: /\bsonnet 4(?: \d+)?\b/i, pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15 } },
   { pattern: /\bsonnet 3 7\b/i, pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15 } },
   { pattern: /\bsonnet 3 5\b/i, pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15 } },
@@ -53,8 +54,13 @@ function normalizeModelName(modelName: string): string {
     .trim();
 }
 
-function matchAnthropicPricing(modelName: string): ModelPricing | null {
+function matchAnthropicPricing(modelName: string, now: Date): ModelPricing | null {
   const normalized = normalizeModelName(modelName);
+  if (SONNET_5_PATTERN.test(normalized)) {
+    return now.getTime() < SONNET_5_PROMO_END_MS
+      ? { inputUsdPerMillion: 2, outputUsdPerMillion: 10 }
+      : { inputUsdPerMillion: 3, outputUsdPerMillion: 15 };
+  }
   for (const entry of ANTHROPIC_MODEL_PRICING) {
     if (entry.pattern.test(normalized)) {
       return entry.pricing;
@@ -67,7 +73,7 @@ function calculateUsd(tokens: number, usdPerMillion: number): number {
   return (tokens * usdPerMillion) / TOKENS_PER_MILLION;
 }
 
-function getAnthropicPricing(stdin: StdinData): ModelPricing | null {
+function getAnthropicPricing(stdin: StdinData, now: Date): ModelPricing | null {
   const candidates = [
     stdin.model?.display_name?.trim(),
     stdin.model?.id?.trim(),
@@ -78,7 +84,7 @@ function getAnthropicPricing(stdin: StdinData): ModelPricing | null {
       continue;
     }
 
-    const pricing = matchAnthropicPricing(candidate);
+    const pricing = matchAnthropicPricing(candidate, now);
     if (pricing) {
       return pricing;
     }
@@ -90,7 +96,7 @@ function getAnthropicPricing(stdin: StdinData): ModelPricing | null {
 export function estimateSessionCost(
   stdin: StdinData,
   sessionTokens: SessionTokenUsage | undefined,
-  options?: { allowRoutedCost?: boolean },
+  options?: { allowRoutedCost?: boolean; now?: Date },
 ): SessionCostEstimate | null {
   if (!sessionTokens) {
     return null;
@@ -100,7 +106,7 @@ export function estimateSessionCost(
     return null;
   }
 
-  const pricing = getAnthropicPricing(stdin);
+  const pricing = getAnthropicPricing(stdin, options?.now ?? new Date());
   if (!pricing) {
     return null;
   }
