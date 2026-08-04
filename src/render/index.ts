@@ -345,6 +345,38 @@ function collectMergeSequence(
   return sequence;
 }
 
+// Push the configured elements of a combined merge-group row to the right
+// edge, padding the gap with spaces. Returns null when right-alignment does
+// not apply — no configured elements on either side, or not enough room for
+// at least one space between the two halves — so the caller falls back to the
+// normal separator join.
+function alignGroupRight(
+  entries: Array<{ element: HudElement; line: string }>,
+  rightAlign: Set<HudElement>,
+  terminalWidth: number,
+): string | null {
+  if (rightAlign.size === 0) {
+    return null;
+  }
+
+  const leftEntries = entries.filter(({ element }) => !rightAlign.has(element));
+  const rightEntries = entries.filter(({ element }) => rightAlign.has(element));
+
+  if (leftEntries.length === 0 || rightEntries.length === 0) {
+    return null;
+  }
+
+  const leftText = leftEntries.map(({ line }) => line).join(' │ ');
+  const rightText = rightEntries.map(({ line }) => line).join(' │ ');
+  const gap = terminalWidth - visualLength(leftText) - visualLength(rightText);
+
+  if (gap < 1) {
+    return null;
+  }
+
+  return `${leftText}${' '.repeat(gap)}${rightText}`;
+}
+
 function collectActivityLines(ctx: RenderContext): string[] {
   const activityLines: string[] = [];
   const display = ctx.config?.display;
@@ -439,6 +471,7 @@ function renderExpanded(ctx: RenderContext, terminalWidth: number | null = null)
   const elementOrder = ctx.config?.elementOrder ?? DEFAULT_ELEMENT_ORDER;
   const mergeGroups = ctx.config?.display?.mergeGroups ?? DEFAULT_MERGE_GROUPS;
   const mergeGroupLookup = buildMergeGroupLookup(mergeGroups);
+  const rightAlign = new Set<HudElement>(ctx.config?.display?.rightAlign ?? []);
   const memoryLineVisible = elementOrder.includes('memory')
     && ctx.config?.display?.showMemoryUsage === true
     && ctx.memoryUsage != null;
@@ -487,11 +520,16 @@ function renderExpanded(ctx: RenderContext, terminalWidth: number | null = null)
         if (renderedGroupLines.length > 1) {
           const combinedLine = renderedGroupLines.map(({ line }) => line).join(' │ ');
           const widthIsReal = terminalWidth !== UNKNOWN_TERMINAL_WIDTH;
+          // The fit check uses the unpadded join: right-alignment only inserts
+          // spaces, so it never changes whether the content itself fits.
           const canCombine = !widthIsReal || visualLength(combinedLine) <= terminalWidth;
+          const alignedLine = widthIsReal
+            ? alignGroupRight(renderedGroupLines, rightAlign, terminalWidth)
+            : null;
 
           if (canCombine) {
             lines.push({
-              line: combinedLine,
+              line: alignedLine ?? combinedLine,
               isActivity: renderedGroupLines.some(({ element: groupedElement }) => ACTIVITY_ELEMENTS.has(groupedElement)),
             });
           } else {
