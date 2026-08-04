@@ -4,6 +4,9 @@ All notable changes to Claude HUD will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Add local cost pricing for the Claude 5 model family (Opus 5, Sonnet 5, Fable 5), so the estimated-cost fallback no longer silently disappears on current models (#694).
+
 ## [0.6.0] - 2026-07-20
 
 ### Added
