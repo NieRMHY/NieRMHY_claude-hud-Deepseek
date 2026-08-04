@@ -105,11 +105,12 @@ interface TranscriptCacheFile {
   data: SerializedTranscriptData;
 }
 
-const TRANSCRIPT_CACHE_VERSION = 14;
+const TRANSCRIPT_CACHE_VERSION = 15;
 const MCP_TOOL_NAME_PATTERN = /^mcp__(.+?)__(.+)$/;
 const ACTIVITY_NAME_MAX_LEN = 64;
 const MESSAGE_ID_MAX_LEN = 128;
 const MESSAGE_USAGE_MAX = 4096;
+const MCP_ERROR_SERVERS_MAX = 64;
 
 // Hard cap on the advisor model ID captured from the transcript. Real Claude
 // model IDs (e.g. "claude-haiku-4-5-20251001") fit comfortably under this; the
@@ -287,7 +288,7 @@ function deserializeTranscriptData(data: SerializedTranscriptData): TranscriptDa
     })),
     skills: normalizeNameList(data.skills),
     mcpServers: normalizeNameList(data.mcpServers),
-    mcpErrors: normalizeNameList(data.mcpErrors),
+    mcpErrors: normalizeNameList(data.mcpErrors).slice(0, MCP_ERROR_SERVERS_MAX),
     agents: data.agents.map((agent) => ({
       ...agent,
       model: sanitizeTranscriptModel(agent.model),
@@ -739,12 +740,18 @@ function processEntry(
         tool.status = block.is_error ? 'error' : 'completed';
         tool.endTime = timestamp;
 
-        // Attribute a failing MCP tool back to its server so the environment
-        // line can flag it. Names are `mcp__<server>__<tool>`.
-        if (block.is_error && tool.name.startsWith('mcp__')) {
-          const parts = tool.name.split('__');
-          if (parts.length >= 3 && parts[1]) {
-            mcpErrorSet.add(parts[1]);
+        // Track each server's latest observed result. Tool names are untrusted
+        // transcript data, so reuse the bounded terminal-safe extractor.
+        const mcpServerName = extractMcpServerName(tool.name);
+        if (mcpServerName) {
+          if (block.is_error) {
+            if (!mcpErrorSet.has(mcpServerName) && mcpErrorSet.size >= MCP_ERROR_SERVERS_MAX) {
+              const oldest = mcpErrorSet.values().next().value;
+              if (oldest !== undefined) mcpErrorSet.delete(oldest);
+            }
+            mcpErrorSet.add(mcpServerName);
+          } else {
+            mcpErrorSet.delete(mcpServerName);
           }
         }
       }

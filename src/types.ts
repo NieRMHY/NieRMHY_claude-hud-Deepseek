@@ -153,10 +153,9 @@ export interface TranscriptData {
   skills: string[];
   mcpServers: string[];
   /**
-   * MCP servers that returned at least one tool error this session, derived
+   * MCP servers whose latest observed tool result is an error, derived
    * from `mcp__<server>__<tool>` results carrying is_error. Distinct from
-   * mcpServers, which is a plain activity list — a failing server is worth
-   * surfacing even when the config-count display is otherwise quiet.
+   * mcpServers, which is a plain activity list.
    */
   mcpErrors: string[];
   agents: AgentEntry[];

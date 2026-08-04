@@ -1404,7 +1404,7 @@ test('parseTranscript attributes MCP tool errors back to their server', async ()
     },
   ]);
 
-  assert.deepEqual([...result.mcpErrors].sort(), ['github', 'tenable']);
+  assert.deepEqual(result.mcpErrors, ['tenable']);
 });
 
 test('parseTranscript records no MCP errors when every MCP call succeeds', async () => {
@@ -1420,6 +1420,22 @@ test('parseTranscript records no MCP errors when every MCP call succeeds', async
   ]);
 
   assert.deepEqual(result.mcpErrors, []);
+});
+
+test('parseTranscript sanitizes and bounds MCP error server names on first parse', async () => {
+  const poisoned = `bad\x1b]8;;https://evil.test\x07link\x1b]8;;\x07\u202E${'x'.repeat(100)}`;
+  const result = await parseTempTranscript('mcp-error-sanitized.jsonl', [{
+    message: {
+      content: [
+        { type: 'tool_use', id: 'm1', name: `mcp__${poisoned}__run`, input: {} },
+        { type: 'tool_result', tool_use_id: 'm1', is_error: true },
+      ],
+    },
+  }]);
+
+  assert.equal(result.mcpErrors.length, 1);
+  assert.equal(result.mcpErrors[0].length, 64);
+  assert.doesNotMatch(result.mcpErrors[0], /[\x1b\u202E]/u);
 });
 
 // A failing non-MCP tool must not be attributed to a server — the name has no
