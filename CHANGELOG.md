@@ -4,11 +4,26 @@ All notable changes to Claude HUD will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-04
+
 ### Added
+- Read bounded model-scoped usage windows from an optional external snapshot while preserving explicit empty stdin snapshots (#690).
+- Configure wall-clock hour cycles and optional seconds without changing the locale-driven default (#692).
+- Right-align an ordered suffix of merged expanded rows with `display.rightAlign` (#693).
+- Price Claude Opus 5, Sonnet 5, and Fable 5 in local cost estimates, including Sonnet's time-limited introductory rate (#694).
 - Detect the official MiniMax Anthropic-compatible endpoints and estimate MiniMax M2.7 token/cache cost without guessing MiniMax M3's request-tier pricing (#696).
+- Surface bounded MCP server failures when MCP activity or config counts are enabled, clearing a failure after a later successful result (#699).
+- Cache derived opt-in authentication labels against the source profile identity (#700).
 
 ### Fixed
-- Add local cost pricing for the Claude 5 model family (Opus 5, Sonnet 5, Fable 5), so the estimated-cost fallback no longer silently disappears on current models (#694).
+- Silence `/dev/tty` probe failures during setup command execution (#686).
+- Treat Unicode variation selectors as zero-width in terminal-cell calculations (#687).
+- Count completed and progressive assistant token records after zero-value transcript placeholders (#698).
+- Preserve configured element order in right-aligned rows and cap hostile terminal/config widths (#693).
+
+### Security
+- Sanitize, bound, cache-version, and opt-in MCP error names before terminal rendering (#699).
+- Validate and version derived-auth cache entries, reject symlink/oversized reads, use private permissions, and write through unique exclusive temporary files (#700).
 
 ## [0.6.0] - 2026-07-20
 
