@@ -104,11 +104,11 @@ interface TranscriptCacheFile {
   data: SerializedTranscriptData;
 }
 
-const TRANSCRIPT_CACHE_VERSION = 13;
+const TRANSCRIPT_CACHE_VERSION = 14;
 const MCP_TOOL_NAME_PATTERN = /^mcp__(.+?)__(.+)$/;
 const ACTIVITY_NAME_MAX_LEN = 64;
 const MESSAGE_ID_MAX_LEN = 128;
-const SEEN_MESSAGE_IDS_MAX = 4096;
+const MESSAGE_USAGE_MAX = 4096;
 
 // Hard cap on the advisor model ID captured from the transcript. Real Claude
 // model IDs (e.g. "claude-haiku-4-5-20251001") fit comfortably under this; the
@@ -132,14 +132,38 @@ function normalizeMessageId(value: unknown): string | null {
     : null;
 }
 
-function rememberMessageId(seenMessageIds: Set<string>, messageId: string): void {
-  if (seenMessageIds.size >= SEEN_MESSAGE_IDS_MAX) {
-    const oldest = seenMessageIds.values().next().value;
+function accumulateMessageUsage(
+  usageByMessageId: Map<string, SessionTokenUsage>,
+  messageId: string,
+  current: SessionTokenUsage,
+  total: SessionTokenUsage,
+): void {
+  const previous = usageByMessageId.get(messageId);
+  if (!previous && usageByMessageId.size >= MESSAGE_USAGE_MAX) {
+    const oldest = usageByMessageId.keys().next().value;
     if (oldest !== undefined) {
-      seenMessageIds.delete(oldest);
+      usageByMessageId.delete(oldest);
     }
   }
-  seenMessageIds.add(messageId);
+
+  const prior = previous ?? {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+  };
+
+  total.inputTokens += Math.max(0, current.inputTokens - prior.inputTokens);
+  total.outputTokens += Math.max(0, current.outputTokens - prior.outputTokens);
+  total.cacheCreationTokens += Math.max(0, current.cacheCreationTokens - prior.cacheCreationTokens);
+  total.cacheReadTokens += Math.max(0, current.cacheReadTokens - prior.cacheReadTokens);
+
+  usageByMessageId.set(messageId, {
+    inputTokens: Math.max(prior.inputTokens, current.inputTokens),
+    outputTokens: Math.max(prior.outputTokens, current.outputTokens),
+    cacheCreationTokens: Math.max(prior.cacheCreationTokens, current.cacheCreationTokens),
+    cacheReadTokens: Math.max(prior.cacheReadTokens, current.cacheReadTokens),
+  });
 }
 
 function normalizeSessionTokens(tokens: unknown): SessionTokenUsage | undefined {
@@ -383,7 +407,7 @@ export async function parseTranscript(transcriptPath: string): Promise<Transcrip
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
   };
-  const seenMessageIds = new Set<string>();
+  const usageByMessageId = new Map<string, SessionTokenUsage>();
   let lastUsageKey: string | undefined;
 
   let parsedCleanly = false;
@@ -465,25 +489,26 @@ export async function parseTranscript(transcriptPath: string): Promise<Transcrip
         if (entry.type === 'assistant' && entry.message?.usage) {
           const usage = entry.message.usage;
           const msgId = normalizeMessageId(entry.message.id);
-          let shouldCount = false;
+          const normalizedUsage: SessionTokenUsage = {
+            inputTokens: normalizeTokenCount(usage.input_tokens),
+            outputTokens: normalizeTokenCount(usage.output_tokens),
+            cacheCreationTokens: normalizeTokenCount(usage.cache_creation_input_tokens),
+            cacheReadTokens: normalizeTokenCount(usage.cache_read_input_tokens),
+          };
 
           if (msgId !== null) {
             lastUsageKey = undefined;
-            if (!seenMessageIds.has(msgId)) {
-              rememberMessageId(seenMessageIds, msgId);
-              shouldCount = true;
-            }
+            accumulateMessageUsage(usageByMessageId, msgId, normalizedUsage, sessionTokens);
           } else {
             const usageKey = `${usage.input_tokens}|${usage.output_tokens}|${usage.cache_creation_input_tokens}|${usage.cache_read_input_tokens}`;
-            shouldCount = usageKey !== lastUsageKey;
+            const shouldCount = usageKey !== lastUsageKey;
             lastUsageKey = usageKey;
-          }
-
-          if (shouldCount) {
-            sessionTokens.inputTokens += normalizeTokenCount(usage.input_tokens);
-            sessionTokens.outputTokens += normalizeTokenCount(usage.output_tokens);
-            sessionTokens.cacheCreationTokens += normalizeTokenCount(usage.cache_creation_input_tokens);
-            sessionTokens.cacheReadTokens += normalizeTokenCount(usage.cache_read_input_tokens);
+            if (shouldCount) {
+              sessionTokens.inputTokens += normalizedUsage.inputTokens;
+              sessionTokens.outputTokens += normalizedUsage.outputTokens;
+              sessionTokens.cacheCreationTokens += normalizedUsage.cacheCreationTokens;
+              sessionTokens.cacheReadTokens += normalizedUsage.cacheReadTokens;
+            }
           }
         } else {
           lastUsageKey = undefined;
