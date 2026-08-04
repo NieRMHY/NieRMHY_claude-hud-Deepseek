@@ -4,6 +4,9 @@ All notable changes to Claude HUD will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Detect the official MiniMax Anthropic-compatible endpoints and estimate MiniMax M2.7 token/cache cost without guessing MiniMax M3's request-tier pricing (#696).
+
 ### Fixed
 - Add local cost pricing for the Claude 5 model family (Opus 5, Sonnet 5, Fable 5), so the estimated-cost fallback no longer silently disappears on current models (#694).
 
