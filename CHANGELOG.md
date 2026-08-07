@@ -4,6 +4,9 @@ All notable changes to Claude HUD will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Prevent short-lived Windows statusline processes from orphaning their owned Git process trees, with bounded output, timeouts, and non-interactive read-only Git behavior (#703).
+
 ## [0.7.0] - 2026-08-04
 
 ### Added
