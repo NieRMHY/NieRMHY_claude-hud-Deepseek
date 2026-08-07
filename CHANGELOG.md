@@ -4,10 +4,7 @@ All notable changes to Claude HUD will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
-- Prevent short-lived Windows statusline processes from orphaning their owned Git process trees, with bounded output, timeouts, and non-interactive read-only Git behavior (#703).
-
-## [0.7.0] - 2026-08-04
+## [0.7.0] - 2026-08-07
 
 ### Added
 - Read bounded model-scoped usage windows from an optional external snapshot while preserving explicit empty stdin snapshots (#690).
@@ -19,6 +16,7 @@ All notable changes to Claude HUD will be documented in this file.
 - Cache derived opt-in authentication labels against the source profile identity (#700).
 
 ### Fixed
+- Prevent short-lived Windows statusline processes from orphaning their owned Git process trees, with bounded output, timeouts, and non-interactive read-only Git behavior (#703).
 - Silence `/dev/tty` probe failures during setup command execution (#686).
 - Treat Unicode variation selectors as zero-width in terminal-cell calculations (#687).
 - Count completed and progressive assistant token records after zero-value transcript placeholders (#698).
