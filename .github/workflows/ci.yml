@@ -32,4 +32,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: node --test tests/git.test.js tests/git-runner.test.js
+      - name: Run Windows Git tests
+        shell: pwsh
+        run: |
+          $output = & node --test tests/git.test.js tests/git-runner.test.js 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Output $_ }
+          if ($exitCode -ne 0) {
+            $annotation = ($output -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows Git tests failed::$annotation"
+            exit $exitCode
+          }
