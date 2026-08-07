@@ -21,3 +21,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:coverage
+
+  windows-git:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node --test tests/git.test.js tests/git-runner.test.js

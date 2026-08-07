@@ -26,6 +26,9 @@ All notable changes to Claude HUD will be documented in this file.
 - Sanitize, bound, cache-version, and opt-in MCP error names before terminal rendering (#699).
 - Validate and version derived-auth cache entries, reject symlink/oversized reads, use private permissions, and write through unique exclusive temporary files (#700).
 
+### Dependencies
+- Update the development-only `@types/node` package from 26.1.1 to 26.1.2 (#697).
+
 ## [0.6.0] - 2026-07-20
 
 ### Added
