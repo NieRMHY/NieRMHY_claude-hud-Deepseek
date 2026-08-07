@@ -39,7 +39,11 @@ jobs:
           $exitCode = $LASTEXITCODE
           $output | ForEach-Object { Write-Output $_ }
           if ($exitCode -ne 0) {
-            $annotation = ($output -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            $details = $output -join "`n"
+            if ($details.Length -gt 3500) {
+              $details = $details.Substring($details.Length - 3500)
+            }
+            $annotation = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Output "::error title=Windows Git tests failed::$annotation"
             exit $exitCode
           }
