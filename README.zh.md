@@ -9,6 +9,16 @@
 
 > 🌐 [English README](README.md) | 中文文档
 
+> ⚠️ **本仓库是 fork**（`claude-hud-mhy`）：[jarrodwatts/claude-hud](https://github.com/jarrodwatts/claude-hud) 的个人 fork，仅在官方基础上增加一个 SessionStart hook 自动维持 `statusLine`（防 cc-switch 覆盖 `~/.claude/settings.json`），其余与上游同步。下文为上游安装说明，官方用户请从 `jarrodwatts/claude-hud` 安装。fork 用户按下面方式安装：
+>
+> ```
+> /plugin marketplace add NieRMHY/NieRMHY_claude-hud-Deepseek
+> /plugin install claude-hud@claude-hud-mhy
+> /claude-hud:setup
+> ```
+>
+> fork 维护（上游同步、本地独有文件、踩坑记录）见本仓库 `CLAUDE.md`。
+
 ## 安装
 
 在 Claude Code 实例中，运行以下命令：

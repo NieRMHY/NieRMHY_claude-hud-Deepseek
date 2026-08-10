@@ -9,6 +9,16 @@ A Claude Code plugin that shows what's happening — context usage, active tools
 
 > 🌐 English | [中文文档](README.zh.md)
 
+> ⚠️ **This repository is a fork** (`claude-hud-mhy`): a personal fork of [jarrodwatts/claude-hud](https://github.com/jarrodwatts/claude-hud) that adds only a SessionStart hook to auto-maintain `statusLine` (protects against cc-switch overwriting `~/.claude/settings.json`). Everything else tracks upstream. The instructions below are upstream's — official users should install from `jarrodwatts/claude-hud`. Fork users, install like this:
+>
+> ```
+> /plugin marketplace add NieRMHY/NieRMHY_claude-hud-Deepseek
+> /plugin install claude-hud@claude-hud-mhy
+> /claude-hud:setup
+> ```
+>
+> See `CLAUDE.md` in this repo for fork maintenance (upstream sync, local-only files, known pitfalls).
+
 ## Install
 
 Inside a Claude Code instance, run the following commands:

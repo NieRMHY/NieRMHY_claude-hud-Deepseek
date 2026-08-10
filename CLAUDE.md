@@ -1,6 +1,93 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with this repository.
+本仓库是 **fork**：`jarrodwatts/claude-hud` → `NieRMHY/NieRMHY_claude-hud-Deepseek`，marketplace 名 **`claude-hud-mhy`**。这是插件开发的主目录；`/home/niermhy/claude_settings/plugins/claude-hud/` 只是配置存档副本，改代码一律在本仓库。
+
+## Fork 独有改动（相对 upstream/main）
+
+`main` = upstream **0.5.1** + 本地提交 `50a1232`。相对上游只多了 4 处，全部围绕"自动维持 statusLine"这一个目标：
+
+| 文件 | 改动 | 同步上游后必须检查 |
+|------|------|--------------------|
+| `.claude-plugin/plugin.json` | `name` 改 `claude-hud-mhy`；新增 `"hooks": "./hooks/hooks.json"`；description 标注 fork | 上游每次发版 bump version 且**不带 hooks 字段**，merge 后常被覆盖，需手动补回 |
+| `.claude-plugin/marketplace.json` | `name` 改 `claude-hud-mhy`（避免与上游 marketplace 重名冲突） | merge 可能被还原成 `claude-hud` |
+| `hooks/hooks.json` | 新增 SessionStart hook → `bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-statusline.sh` | 上游没有 `hooks/` 目录，merge 不受影响 |
+| `scripts/ensure-statusline.sh` | 新增：备份/恢复 statusLine（fork 唯一逻辑独有文件） | 上游 `scripts/` 只有 `clean-dist.mjs` |
+
+### ensure-statusline.sh 机制（幂等）
+
+解决 cc-switch 切换 provider 时用其 SQLite db 覆盖 `~/.claude/settings.json`、丢失 `statusLine` 字段的问题。每次 SessionStart 触发：
+
+| settings.json 当前 | 备份 `~/.claude/.claude-hud-statusline.json` | 行为 |
+|---|---|---|
+| 有 statusLine | 任意 | 备份当前值 |
+| 无 statusLine | 存在 | 从备份恢复 |
+| 无 statusLine | 不存在 | 跳过（首次需用户跑 `/claude-hud:setup`） |
+
+## 同步上游（维护主流程）
+
+上游有更新时：
+
+```bash
+cd /home/niermhy/workspace/project/project_myself/Claude_Code_plugins/NieRMHY_claude-hud-Deepseek
+git fetch upstream
+git merge upstream/main
+# 合并后立即检查 fork 独有改动是否还在：
+git diff upstream/main -- .claude-plugin/ hooks/ scripts/ensure-statusline.sh
+grep '"hooks"' .claude-plugin/plugin.json || echo '需手动补回 "hooks": "./hooks/hooks.json"'
+# 若 plugin.json / marketplace.json 的 name 被还原，改回 claude-hud-mhy
+
+npm ci && npm run build        # 重新编译 dist/
+git add -A && git commit -m "sync: 同步上游 <版本> + 保留本地改动"
+git push origin main
+```
+
+用户侧更新：在 Claude Code 里跑 `/plugin update claude-hud@claude-hud-mhy`。
+
+> 上游发版只改代码，`hooks/` 与 `scripts/ensure-statusline.sh` 上游不存在，merge 不会冲突；但 `plugin.json` / `marketplace.json` 上游同样维护，会被 merge 覆盖回官方值（丢 `hooks` 字段、name 还原），**这两个文件是每次同步的必查项**。
+
+## 本地开发与测试
+
+```bash
+npm ci                # 装依赖（或 bun install）
+npm run build         # 编译 dist/（node scripts/clean-dist.mjs && tsc）
+npm test              # build + node --test
+npm run test:stdin    # 用样例 stdin 跑一次渲染，快速验证
+
+# 手动喂数据调试渲染
+echo '{"model":{"display_name":"Opus"},"context_window":{"current_usage":{"input_tokens":45000},"context_window_size":200000}}' | node dist/index.js
+```
+
+改完想在本机立即生效（用 main 内容覆盖已安装插件的 cache 目录）：
+
+```bash
+PLUGIN_DIR=$(ls -d ~/.claude/plugins/cache/*/claude-hud/*/ 2>/dev/null | sort -V | tail -1)
+find "$PLUGIN_DIR" -mindepth 1 -delete
+git archive main | tar -x -C "$PLUGIN_DIR"
+chmod +x "$PLUGIN_DIR/scripts/"*.sh
+# 重启 Claude Code 验证
+```
+
+## 运行时文件位置
+
+| 路径 | 说明 |
+|------|------|
+| `~/.claude/plugins/cache/claude-hud-mhy/claude-hud/<version>/` | 插件运行副本（cache，版本号随发版变化） |
+| `~/.claude/plugins/claude-hud/config.json` | 用户显示配置，独立于插件目录，插件更新不覆盖 |
+| `~/.claude/.claude-hud-statusline.json` | hook 自动生成的 statusLine 备份 |
+| `~/.claude/hud-statusline.sh` | statusline 入口脚本（部署副本，源自配置存档目录） |
+| `/home/niermhy/claude_settings/plugins/claude-hud/` | 配置存档/分发副本（换机部署用，非开发） |
+| vault 开发记录 | `AI/Claude Code/plugin 开发/claude-hud 开发记录.md` |
+
+## 踩坑记录
+
+1. **cc-switch 覆盖 settings.json 丢 statusLine**：cc-switch 切 provider 时用其 SQLite db（`~/.cc-switch/cc-switch.db` 的 `providers.settings_config`）覆盖 settings.json，该字段无 statusLine。已由 SessionStart hook 自动备份/恢复，不修改 cc-switch db。若 HUD 消失，先看 `~/.claude/.claude-hud-statusline.json` 是否存在。
+2. **同步上游后 hooks 字段丢失**：上游 plugin.json 无 hooks 字段，每次 merge 必查（见同步流程）。
+3. **插件 scope 变 project 导致 `/claude-hud:` 命令不识别**：插件被注册为 `scope: project` 时，切到其他工作目录命令就失效。用 `/plugin marketplace add` + `/plugin install` 重装，让 Claude Code 自己管理 scope。
+4. **marketplace 名冲突**：fork 与上游 marketplace 都叫 `claude-hud` 会冲突，fork 固定用 `claude-hud-mhy`。
+
+---
+
+以下为上游 claude-hud 的开发参考（随 upstream 保持同步，勿在此记录 fork 独有内容）。
 
 ## Project Overview
 
@@ -66,6 +153,8 @@ src/
 ├── transcript.ts        # Parse transcript JSONL
 ├── config-reader.ts     # Read MCP/rules configs
 ├── config.ts            # Load/validate user config
+├── auth.ts              # Auth/account state (model-scoped weekly usage)
+├── model-source.ts      # Resolve which model source a usage window belongs to
 ├── git.ts               # Git status (branch, dirty, ahead/behind)
 ├── cost.ts              # Cost estimation (native stdin cost preferred)
 ├── effort.ts            # Thinking effort parsing
@@ -132,13 +221,13 @@ Lines 1-2 always shown. Additional lines are opt-in via config:
 
 ## Plugin Configuration
 
-The plugin manifest is in `.claude-plugin/plugin.json` (metadata only - name, description, version, author).
+The plugin manifest is in `.claude-plugin/plugin.json` (metadata + `hooks` field pointing to `./hooks/hooks.json`; the hooks field and `claude-hud-mhy` name are fork-local, see the fork section above).
 
 **StatusLine configuration** must be added to the user's `~/.claude/settings.json` via `/claude-hud:setup`.
 
 The setup command adds an auto-updating command that finds the latest installed version at runtime.
 
-Note: `statusLine` is NOT a valid plugin.json field. It must be configured in settings.json after plugin installation. Updates are automatic - no need to re-run setup.
+Note: `statusLine` is NOT a valid plugin.json field. It must be configured in settings.json after plugin installation. In this fork, the SessionStart hook auto-backs-up / restores it against cc-switch overwrites.
 
 ## Dependencies
 
