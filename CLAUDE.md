@@ -86,6 +86,8 @@ chmod +x "$PLUGIN_DIR/scripts/"*.sh
 2. **同步上游后 hooks 字段丢失**：上游 plugin.json 无 hooks 字段，每次 merge 必查（见同步流程）。
 3. **插件 scope 变 project 导致 `/claude-hud:` 命令不识别**：插件被注册为 `scope: project` 时，切到其他工作目录命令就失效。用 `/plugin marketplace add` + `/plugin install` 重装，让 Claude Code 自己管理 scope。
 4. **marketplace 名冲突**：fork 与上游 marketplace 都叫 `claude-hud` 会冲突，fork 固定用 `claude-hud-mhy`。
+5. **`/plugin update` 拉错内容（无 hooks）——必须先 `/plugin marketplace update`**：插件是从 marketplace 克隆（`~/.claude/plugins/marketplaces/claude-hud-mhy/`）拉取的，克隆陈旧时 update 会拉到旧内容。本机曾因 marketplace 克隆停在 0.3.0 的旧 commit，装出的插件 plugin.json 无 hooks、`hooks/` 不存在，**SessionStart hook 从未生效**。正确发布/更新流程：bump version → push fork main → 用户先 `/plugin marketplace update` 再 `/plugin update`；更新后验证 cache 目录 plugin.json 含 `"hooks"` 字段。网络不通时，marketplace 克隆可用 `git fetch <本地开发仓库路径> main && git reset --hard FETCH_HEAD` 绕过网络手动更新。
+6. **双插件并存时 hud-launcher.sh 按版本抢显示**：`~/.claude/hud-launcher.sh` 按版本号选最高 cache 目录，上游 claude-hud 与 fork 并存时版本高的会被选中（如上游 0.6.0 > fork 0.5.1，HUD 显示上游内容、fork 的 hooks/token 改动看不到）。本机已卸载上游插件只保留 fork。排查 HUD 实际用哪个插件：`ls ~/.claude/plugins/cache/*/claude-hud/*/`，并模拟 launcher 的版本排序取最大。
 
 ---
 
