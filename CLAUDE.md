@@ -4,7 +4,7 @@
 
 ## Fork 独有改动（相对 upstream/main）
 
-`main` = upstream **0.5.1** + 本地提交 `50a1232`。相对上游只多了 4 处，全部围绕"自动维持 statusLine"这一个目标：
+`main` 与 upstream/main 保持同步（发版时随上游更新），相对上游只多下面几处 fork 独有改动，目标有二：① 自动维持 statusLine（防 cc-switch 覆盖）；② 简体中文 HUD 措辞偏好：
 
 | 文件 | 改动 | 同步上游后必须检查 |
 |------|------|--------------------|
@@ -12,6 +12,7 @@
 | `.claude-plugin/marketplace.json` | `name` 改 `claude-hud-mhy`（避免与上游 marketplace 重名冲突） | merge 可能被还原成 `claude-hud` |
 | `hooks/hooks.json` | 新增 SessionStart hook → `bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-statusline.sh` | 上游没有 `hooks/` 目录，merge 不受影响 |
 | `scripts/ensure-statusline.sh` | 新增：备份/恢复 statusLine（fork 唯一逻辑独有文件） | 上游 `scripts/` 只有 `clean-dist.mjs` |
+| `src/i18n/zh-Hans.ts` | `label.tokens` / `format.tok` 译作 `token`（上游为"词元"） | 上游改翻译时可能被 merge 覆盖，需改回 `token` |
 
 ### ensure-statusline.sh 机制（幂等）
 
@@ -32,8 +33,9 @@ cd /home/niermhy/workspace/project/project_myself/Claude_Code_plugins/NieRMHY_cl
 git fetch upstream
 git merge upstream/main
 # 合并后立即检查 fork 独有改动是否还在：
-git diff upstream/main -- .claude-plugin/ hooks/ scripts/ensure-statusline.sh
+git diff upstream/main -- .claude-plugin/ hooks/ scripts/ensure-statusline.sh src/i18n/zh-Hans.ts
 grep '"hooks"' .claude-plugin/plugin.json || echo '需手动补回 "hooks": "./hooks/hooks.json"'
+grep '"token"' src/i18n/zh-Hans.ts || echo '需把 label.tokens / format.tok 改回 token（上游译作"词元"）'
 # 若 plugin.json / marketplace.json 的 name 被还原，改回 claude-hud-mhy
 
 npm ci && npm run build        # 重新编译 dist/
@@ -43,7 +45,7 @@ git push origin main
 
 用户侧更新：在 Claude Code 里跑 `/plugin update claude-hud@claude-hud-mhy`。
 
-> 上游发版只改代码，`hooks/` 与 `scripts/ensure-statusline.sh` 上游不存在，merge 不会冲突；但 `plugin.json` / `marketplace.json` 上游同样维护，会被 merge 覆盖回官方值（丢 `hooks` 字段、name 还原），**这两个文件是每次同步的必查项**。
+> 上游发版只改代码，`hooks/` 与 `scripts/ensure-statusline.sh` 上游不存在，merge 不会冲突；但 `plugin.json` / `marketplace.json` 上游同样维护，会被 merge 覆盖回官方值（丢 `hooks` 字段、name 还原），`src/i18n/zh-Hans.ts` 的 token 措辞改动也可能被上游翻译更新覆盖，**这三个文件是每次同步的必查项**。
 
 ## 本地开发与测试
 
