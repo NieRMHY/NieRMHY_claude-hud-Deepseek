@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { getHudPluginDir } from './claude-config-dir.js';
 import { createDebug } from './debug.js';
+import { MAX_TERMINAL_WIDTH } from './utils/terminal.js';
 const debug = createDebug('config');
 export const DEFAULT_ELEMENT_ORDER = [
     'project',
@@ -22,7 +23,23 @@ export const DEFAULT_ELEMENT_ORDER = [
 export const DEFAULT_MERGE_GROUPS = [
     ['context', 'usage'],
 ];
+const PROJECT_LINE_SEGMENTS = [
+    'model',
+    'project',
+    'advisor',
+    'sessionName',
+    'version',
+    'extra',
+    'duration',
+    'cost',
+    'speed',
+    'auth',
+];
+// An empty order is deliberate: renderers retain their byte-for-byte native
+// order until the user opts in to moving one or more segments.
+export const DEFAULT_PROJECT_LINE_ORDER = [];
 const KNOWN_ELEMENTS = new Set(DEFAULT_ELEMENT_ORDER);
+const KNOWN_FIRST_LINE_SEGMENTS = new Set(PROJECT_LINE_SEGMENTS);
 export const DEFAULT_CONFIG = {
     language: 'en',
     lineLayout: 'expanded',
@@ -31,6 +48,7 @@ export const DEFAULT_CONFIG = {
     maxWidth: null,
     forceMaxWidth: false,
     elementOrder: [...DEFAULT_ELEMENT_ORDER],
+    projectLineOrder: [...DEFAULT_PROJECT_LINE_ORDER],
     gitStatus: {
         enabled: true,
         showDirty: true,
@@ -39,6 +57,11 @@ export const DEFAULT_CONFIG = {
         branchOverflow: 'truncate',
         pushWarningThreshold: 0,
         pushCriticalThreshold: 0,
+    },
+    jjStatus: {
+        enabled: false,
+        showDirty: true,
+        showConflicts: true,
     },
     display: {
         showModel: true,
@@ -80,6 +103,7 @@ export const DEFAULT_CONFIG = {
         showLastResponseAt: false,
         showCompactions: false,
         mergeGroups: DEFAULT_MERGE_GROUPS.map(group => [...group]),
+        rightAlign: [],
         autocompactBuffer: 'enabled',
         contextWarningThreshold: 70,
         contextCriticalThreshold: 85,
@@ -97,6 +121,8 @@ export const DEFAULT_CONFIG = {
         customLine: '',
         customLinePosition: 'last',
         timeFormat: 'relative',
+        hourCycle: 'auto',
+        showClockSeconds: false,
         showAdvisor: false,
         advisorOverride: '',
         autoCompactWindow: null,
@@ -122,7 +148,7 @@ export function getConfigPath() {
     return path.join(getHudPluginDir(homeDir), 'config.json');
 }
 function validatePathLevels(value) {
-    return value === 1 || value === 2 || value === 3;
+    return value === 1 || value === 2 || value === 3 || value === 'full';
 }
 function validateLineLayout(value) {
     return value === 'compact' || value === 'expanded';
@@ -154,6 +180,9 @@ function validateTimeFormat(value) {
 }
 function validateCustomLinePosition(value) {
     return value === 'first' || value === 'last';
+}
+function validateHourCycle(value) {
+    return value === 'auto' || value === 'h11' || value === 'h12' || value === 'h23' || value === 'h24';
 }
 function validateColorName(value) {
     return value === 'dim'
@@ -206,6 +235,47 @@ function validateElementOrder(value) {
         elementOrder.push(element);
     }
     return elementOrder.length > 0 ? elementOrder : [...DEFAULT_ELEMENT_ORDER];
+}
+// Unlike `elementOrder`, `projectLineOrder` only reorders segments. A partial
+// list is preserved as a requested prefix; each renderer appends all remaining
+// visible parts in its own existing order.
+function validateProjectLineOrder(value) {
+    if (!Array.isArray(value)) {
+        return [...DEFAULT_PROJECT_LINE_ORDER];
+    }
+    const seen = new Set();
+    const order = [];
+    for (const item of value) {
+        if (typeof item !== 'string' || !KNOWN_FIRST_LINE_SEGMENTS.has(item)) {
+            continue;
+        }
+        const segment = item;
+        if (seen.has(segment)) {
+            continue;
+        }
+        seen.add(segment);
+        order.push(segment);
+    }
+    return order;
+}
+function validateRightAlign(value) {
+    if (!Array.isArray(value)) {
+        return [...DEFAULT_CONFIG.display.rightAlign];
+    }
+    const seen = new Set();
+    const elements = [];
+    for (const item of value) {
+        if (typeof item !== 'string' || !KNOWN_ELEMENTS.has(item)) {
+            continue;
+        }
+        const element = item;
+        if (seen.has(element)) {
+            continue;
+        }
+        seen.add(element);
+        elements.push(element);
+    }
+    return elements;
 }
 function validateMergeGroups(value) {
     if (!Array.isArray(value)) {
@@ -267,7 +337,7 @@ function migrateConfig(userConfig) {
                 migrated.lineLayout = obj.lineLayout;
             if (typeof obj.showSeparators === 'boolean')
                 migrated.showSeparators = obj.showSeparators;
-            if (typeof obj.pathLevels === 'number')
+            if (typeof obj.pathLevels === 'number' || obj.pathLevels === 'full')
                 migrated.pathLevels = obj.pathLevels;
         }
         delete migrated.layout;
@@ -333,9 +403,10 @@ export function mergeConfig(userConfig) {
         : DEFAULT_CONFIG.pathLevels;
     const rawMaxWidth = migrated.maxWidth;
     const maxWidth = (typeof rawMaxWidth === 'number' && Number.isFinite(rawMaxWidth) && rawMaxWidth > 0)
-        ? Math.floor(rawMaxWidth)
+        ? Math.min(Math.floor(rawMaxWidth), MAX_TERMINAL_WIDTH)
         : null;
     const elementOrder = validateElementOrder(migrated.elementOrder);
+    const projectLineOrder = validateProjectLineOrder(migrated.projectLineOrder);
     const forceMaxWidth = typeof migrated.forceMaxWidth === 'boolean'
         ? migrated.forceMaxWidth
         : DEFAULT_CONFIG.forceMaxWidth;
@@ -357,6 +428,17 @@ export function mergeConfig(userConfig) {
             : DEFAULT_CONFIG.gitStatus.branchOverflow,
         pushWarningThreshold: validateCountThreshold(migrated.gitStatus?.pushWarningThreshold),
         pushCriticalThreshold: validateCountThreshold(migrated.gitStatus?.pushCriticalThreshold),
+    };
+    const jjStatus = {
+        enabled: typeof migrated.jjStatus?.enabled === 'boolean'
+            ? migrated.jjStatus.enabled
+            : DEFAULT_CONFIG.jjStatus.enabled,
+        showDirty: typeof migrated.jjStatus?.showDirty === 'boolean'
+            ? migrated.jjStatus.showDirty
+            : DEFAULT_CONFIG.jjStatus.showDirty,
+        showConflicts: typeof migrated.jjStatus?.showConflicts === 'boolean'
+            ? migrated.jjStatus.showConflicts
+            : DEFAULT_CONFIG.jjStatus.showConflicts,
     };
     const display = {
         showModel: typeof migrated.display?.showModel === 'boolean'
@@ -466,6 +548,7 @@ export function mergeConfig(userConfig) {
             ? migrated.display.showCompactions
             : DEFAULT_CONFIG.display.showCompactions,
         mergeGroups: validateMergeGroups(migrated.display?.mergeGroups),
+        rightAlign: validateRightAlign(migrated.display?.rightAlign),
         autocompactBuffer: validateAutocompactBuffer(migrated.display?.autocompactBuffer)
             ? migrated.display.autocompactBuffer
             : DEFAULT_CONFIG.display.autocompactBuffer,
@@ -501,6 +584,12 @@ export function mergeConfig(userConfig) {
         timeFormat: validateTimeFormat(migrated.display?.timeFormat)
             ? migrated.display.timeFormat
             : DEFAULT_CONFIG.display.timeFormat,
+        hourCycle: validateHourCycle(migrated.display?.hourCycle)
+            ? migrated.display.hourCycle
+            : DEFAULT_CONFIG.display.hourCycle,
+        showClockSeconds: typeof migrated.display?.showClockSeconds === 'boolean'
+            ? migrated.display.showClockSeconds
+            : DEFAULT_CONFIG.display.showClockSeconds,
         showAdvisor: typeof migrated.display?.showAdvisor === 'boolean'
             ? migrated.display.showAdvisor
             : DEFAULT_CONFIG.display.showAdvisor,
@@ -550,7 +639,7 @@ export function mergeConfig(userConfig) {
             ? migrated.colors.barEmpty
             : DEFAULT_CONFIG.colors.barEmpty,
     };
-    return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, display, colors };
+    return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, projectLineOrder, gitStatus, jjStatus, display, colors };
 }
 export async function loadConfig() {
     const configPath = getConfigPath();

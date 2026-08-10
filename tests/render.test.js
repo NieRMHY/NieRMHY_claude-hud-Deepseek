@@ -9,6 +9,7 @@ import { render } from '../dist/render/index.js';
 import { mergeConfig } from '../dist/config.js';
 import { parseTranscript } from '../dist/transcript.js';
 import { renderSessionLine } from '../dist/render/session-line.js';
+import { formatAgentModel } from '../dist/render/agents-line.js';
 import { renderProjectLine, renderGitFilesLine } from '../dist/render/lines/project.js';
 import { renderPromptCacheLine } from '../dist/render/lines/prompt-cache.js';
 import { renderToolsLine, shortenToolName } from '../dist/render/tools-line.js';
@@ -61,6 +62,7 @@ function baseContext() {
       pathLevels: 1,
       elementOrder: ['project', 'context', 'usage', 'promptCache', 'memory', 'environment', 'tools', 'skills', 'mcp', 'agents', 'todos'],
       gitStatus: { enabled: true, showDirty: true, showAheadBehind: false, showFileStats: false, branchOverflow: 'truncate', pushWarningThreshold: 0, pushCriticalThreshold: 0 },
+      jjStatus: { enabled: true, showDirty: true, showConflicts: true },
       display: { showModel: true, showProject: true, showContextBar: true, contextValue: 'percent', showConfigCounts: true, showCost: false, showDuration: true, showSpeed: false, showTokenBreakdown: true, showUsage: true, usageValue: 'percent', usageBarEnabled: false, showResetLabel: true, showTools: true, showSkills: false, showMcp: false, showAgents: true, showTodos: true, showSessionTokens: false, showSessionName: false, showClaudeCodeVersion: false, showMemoryUsage: false, showPromptCache: false, promptCacheTtlSeconds: 300, showOutputStyle: false, mergeGroups: [['context', 'usage']], autocompactBuffer: 'enabled', usageThreshold: 0, sevenDayThreshold: 80, environmentThreshold: 0, customLine: '' },
       colors: {
         context: 'green',
@@ -342,7 +344,7 @@ test('renderSessionLine displays project name from POSIX cwd', () => {
   assert.ok(!line.includes('/Users/jarrod'));
 });
 
-test('renderSessionLine displays project name from Windows cwd', { skip: process.platform !== 'win32' }, () => {
+test('renderSessionLine displays project name from Windows cwd on every host', () => {
   const ctx = baseContext();
   ctx.stdin.cwd = 'C:\\Users\\jarrod\\my-project';
   const line = renderSessionLine(ctx);
@@ -355,6 +357,39 @@ test('renderSessionLine handles root path gracefully', () => {
   ctx.stdin.cwd = '/';
   const line = renderSessionLine(ctx);
   assert.ok(line.includes('[Opus]'));
+});
+
+test('renderSessionLine displays full absolute path when pathLevels is "full"', () => {
+  const ctx = baseContext();
+  ctx.config.pathLevels = 'full';
+  ctx.stdin.cwd = '/Users/jarrod/dev/my-project';
+  const line = stripAnsi(renderSessionLine(ctx));
+  assert.ok(line.includes('/Users/jarrod/dev/my-project'));
+});
+
+test('renderSessionLine normalizes a full Windows path on every host', () => {
+  const ctx = baseContext();
+  ctx.config.pathLevels = 'full';
+  ctx.stdin.cwd = 'C:\\Users\\jarrod\\my-project';
+  const line = stripAnsi(renderSessionLine(ctx));
+  assert.ok(line.includes('C:/Users/jarrod/my-project'));
+});
+
+test('renderSessionLine preserves numeric pathLevels behavior for shallow roots', () => {
+  const ctx = baseContext();
+  ctx.config.pathLevels = 1;
+  ctx.stdin.cwd = '/project';
+  const line = stripAnsi(renderSessionLine(ctx));
+  assert.ok(line.includes('project'));
+  assert.ok(!line.includes('/project'));
+});
+
+test('renderSessionLine preserves UNC roots in full mode', () => {
+  const ctx = baseContext();
+  ctx.config.pathLevels = 'full';
+  ctx.stdin.cwd = '\\\\server\\share\\project';
+  const line = stripAnsi(renderSessionLine(ctx));
+  assert.ok(line.includes('//server/share/project'));
 });
 
 test('renderSessionLine supports token-based context display', () => {
@@ -544,6 +579,37 @@ test('renderSessionLine renders a sanitized opt-in transcript model', () => {
   assert.ok(line.includes('[proxy-redlink]'), `got: ${line}`);
   assert.ok(!line.includes('Claude Opus'));
   assert.doesNotMatch(line, /[\x1b\u202E]/u);
+});
+
+test('renderProjectLine displays full absolute path when pathLevels is "full"', () => {
+  const ctx = baseContext();
+  ctx.config.pathLevels = 'full';
+  ctx.stdin.cwd = '/Users/jarrod/dev/my-project';
+  const line = stripAnsi(renderProjectLine(ctx) ?? '');
+  assert.ok(line.includes('/Users/jarrod/dev/my-project'));
+});
+
+test('renderProjectLine normalizes Windows and UNC full paths on every host', () => {
+  const ctx = baseContext();
+  ctx.config.pathLevels = 'full';
+
+  ctx.stdin.cwd = 'C:\\Users\\jarrod\\my-project';
+  assert.ok(stripAnsi(renderProjectLine(ctx) ?? '').includes('C:/Users/jarrod/my-project'));
+
+  ctx.stdin.cwd = '\\\\server\\share\\project';
+  assert.ok(stripAnsi(renderProjectLine(ctx) ?? '').includes('//server/share/project'));
+});
+
+test('project paths strip terminal escapes and bidi overrides in both layouts', () => {
+  const ctx = baseContext();
+  ctx.config.pathLevels = 'full';
+  ctx.stdin.cwd = '/safe/\u001b]8;;https://evil.example\u0007project\u202E';
+
+  for (const line of [renderSessionLine(ctx), renderProjectLine(ctx) ?? '']) {
+    const plain = stripAnsi(line);
+    assert.ok(plain.includes('/safe/project'));
+    assert.doesNotMatch(plain, /[\u001b\u202E]/u);
+  }
 });
 
 test('renderProjectLine includes session name when showSessionName is true', () => {
@@ -1037,7 +1103,9 @@ test('label color overrides apply across shared secondary text surfaces', () => 
   assert.ok(renderUsageLine(ctx)?.includes(`${expected}Usage\x1b[0m`));
   assert.ok(renderUsageLine(ctx, true)?.includes(`${expected}Usage  \x1b[0m`));
   assert.ok(renderUsageLine(ctx, { align: true })?.includes(`${expected}Usage  \x1b[0m`));
-  assert.ok(renderEnvironmentLine(ctx)?.includes(`${expected}2 CLAUDE.md | 1 rules\x1b[0m`));
+  const environmentLine = renderEnvironmentLine(ctx);
+  assert.ok(environmentLine?.includes(`${expected}2 CLAUDE.md\x1b[0m`));
+  assert.ok(environmentLine?.includes(`${expected}1 rules\x1b[0m`));
   assert.ok(renderMemoryLine({ ...ctx, config: { ...ctx.config, lineLayout: 'expanded', display: { ...ctx.config.display, showMemoryUsage: true } } })?.includes(`${expected}Approx RAM\x1b[0m`));
   assert.ok(renderToolsLine(ctx)?.includes(`${expected}: src/index.ts\x1b[0m`));
   assert.ok(renderSkillsLine(ctx)?.includes(`${expected}(1)\x1b[0m`));
@@ -1064,6 +1132,71 @@ test('renderEnvironmentLine appends output style after config counts', () => {
   const line = renderEnvironmentLine(ctx);
   assert.ok(line?.includes('1 CLAUDE.md'));
   assert.ok(line?.includes('style: learning'));
+});
+
+test('renderEnvironmentLine flags MCP servers that returned errors', () => {
+  const ctx = baseContext();
+  ctx.config.display.showConfigCounts = true;
+  ctx.mcpCount = 5;
+  ctx.transcript.mcpErrors = ['github', 'tenable'];
+
+  const line = renderEnvironmentLine(ctx);
+  assert.ok(line?.includes('5 MCPs'), 'count should still render');
+  assert.ok(line?.includes('github, tenable'), 'failing servers should be named');
+  assert.ok(line?.includes('\x1b[31m'), 'error segment should be red');
+});
+
+test('renderEnvironmentLine collapses more than three failing MCPs to a count', () => {
+  const ctx = baseContext();
+  ctx.config.display.showConfigCounts = true;
+  ctx.mcpCount = 9;
+  ctx.transcript.mcpErrors = ['a', 'b', 'c', 'd', 'e'];
+
+  const line = renderEnvironmentLine(ctx);
+  assert.ok(line?.includes('a, b, c +2'), `expected overflow count, got: ${line}`);
+});
+
+// A live fault must not be hidden behind an unrelated display toggle: the
+// config counts are ambient detail people switch off, an erroring server is not.
+test('renderEnvironmentLine preserves the default layout when MCP displays are off', () => {
+  const ctx = baseContext();
+  ctx.config.display.showConfigCounts = false;
+  ctx.mcpCount = 5;
+  ctx.transcript.mcpErrors = ['airlock'];
+
+  ctx.config.display.showMcp = false;
+
+  assert.equal(renderEnvironmentLine(ctx), null);
+});
+
+test('renderEnvironmentLine surfaces MCP errors when the MCP display is enabled', () => {
+  const ctx = baseContext();
+  ctx.config.display.showConfigCounts = false;
+  ctx.config.display.showMcp = true;
+  ctx.transcript.mcpErrors = ['airlock'];
+
+  const line = renderEnvironmentLine(ctx);
+  assert.ok(line?.includes('airlock'));
+});
+
+test('renderEnvironmentLine sanitizes direct MCP errors and uses the critical theme', () => {
+  const ctx = baseContext();
+  ctx.config.display.showMcp = true;
+  ctx.config.colors.critical = 'magenta';
+  ctx.transcript.mcpErrors = ['safe\x1b]8;;https://evil.test\x07link\x1b]8;;\x07\u202E'];
+
+  const line = renderEnvironmentLine(ctx);
+  assert.ok(line?.includes('\x1b[35m'));
+  assert.doesNotMatch(line ?? '', /evil\.test|\u202E/u);
+});
+
+test('renderEnvironmentLine stays null when nothing is enabled and no MCP errors', () => {
+  const ctx = baseContext();
+  ctx.config.display.showConfigCounts = false;
+  ctx.mcpCount = 5;
+  ctx.transcript.mcpErrors = [];
+
+  assert.equal(renderEnvironmentLine(ctx), null);
 });
 
 test('renderEnvironmentLine treats missing showConfigCounts as disabled in expanded layout', () => {
@@ -1351,6 +1484,107 @@ test('renderProjectLine can give git its own segment for wrapping', () => {
   ctx.config.gitStatus.branchOverflow = 'wrap';
   const line = stripAnsi(renderProjectLine(ctx) ?? '');
   assert.ok(line.includes('my-project │ git:(feature/add-auth)'), 'git should render as a separate segment');
+});
+
+test('renderProjectLine shows jj:( label with bookmark when vcs is jj', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: false, ahead: 0, behind: 0, vcs: 'jj', conflict: false };
+  const line = stripAnsi(renderProjectLine(ctx) ?? '');
+  assert.ok(line.includes('jj:(mybookmark)'), `expected jj:( label, got ${line}`);
+  assert.ok(!line.includes('git:('), 'should not use the git label for jj status');
+});
+
+test('renderProjectLine shows dirty marker for jj status', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: true, ahead: 0, behind: 0, vcs: 'jj', conflict: false };
+  const line = stripAnsi(renderProjectLine(ctx) ?? '');
+  assert.ok(line.includes('jj:(mybookmark*)'), `expected dirty marker, got ${line}`);
+});
+
+test('renderProjectLine shows !conflict marker for a conflicted jj status', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: false, ahead: 0, behind: 0, vcs: 'jj', conflict: true };
+  const line = stripAnsi(renderProjectLine(ctx) ?? '');
+  assert.ok(line.includes('jj:(mybookmark !conflict)'), `expected conflict marker, got ${line}`);
+});
+
+test('renderProjectLine hides !conflict marker when jjStatus.showConflicts is false', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: false, ahead: 0, behind: 0, vcs: 'jj', conflict: true };
+  ctx.config.jjStatus = { enabled: true, showDirty: true, showConflicts: false };
+  const line = stripAnsi(renderProjectLine(ctx) ?? '');
+  assert.ok(!line.includes('!conflict'), `expected no conflict marker, got ${line}`);
+});
+
+test('renderProjectLine hides jj status entirely when jjStatus.enabled is false', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: false, ahead: 0, behind: 0, vcs: 'jj', conflict: false };
+  ctx.config.jjStatus = { enabled: false, showDirty: true, showConflicts: true };
+  const line = stripAnsi(renderProjectLine(ctx) ?? '');
+  assert.ok(!line.includes('jj:('), `expected no jj status, got ${line}`);
+});
+
+test('renderProjectLine ignores gitStatus.showAheadBehind/showFileStats for jj status', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: false, ahead: 0, behind: 0, vcs: 'jj', conflict: false };
+  ctx.config.gitStatus.showAheadBehind = true;
+  ctx.config.gitStatus.showFileStats = true;
+  const line = stripAnsi(renderProjectLine(ctx) ?? '');
+  assert.equal(line.includes('↑'), false);
+  assert.equal(/\[[+-]/.test(line), false, `expected no file-stats bracket, got ${line}`);
+});
+
+test('renderSessionLine renders jj dirty and conflict state in compact layout', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = {
+    branch: 'mybookmark',
+    isDirty: true,
+    ahead: 9,
+    behind: 8,
+    fileStats: { modified: 7, added: 6, deleted: 5, untracked: 4, trackedFiles: [] },
+    vcs: 'jj',
+    conflict: true,
+  };
+  ctx.config.gitStatus.showAheadBehind = true;
+  ctx.config.gitStatus.showFileStats = true;
+
+  const line = stripAnsi(renderSessionLine(ctx));
+  assert.ok(line.includes('jj:(mybookmark* !conflict)'), `expected compact jj parity, got ${line}`);
+  assert.equal(line.includes('git:('), false);
+  assert.equal(line.includes('↑9'), false);
+  assert.equal(line.includes('↓8'), false);
+  assert.equal(line.includes('!7'), false);
+});
+
+test('renderSessionLine respects compact jj dirty and conflict toggles', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: true, ahead: 0, behind: 0, vcs: 'jj', conflict: true };
+  ctx.config.jjStatus.showDirty = false;
+  ctx.config.jjStatus.showConflicts = false;
+
+  const line = stripAnsi(renderSessionLine(ctx));
+  assert.ok(line.includes('jj:(mybookmark)'), `expected jj status, got ${line}`);
+  assert.equal(line.includes('mybookmark*'), false);
+  assert.equal(line.includes('!conflict'), false);
+});
+
+test('renderSessionLine hides compact jj status when its opt-in is disabled', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'mybookmark', isDirty: false, ahead: 0, behind: 0, vcs: 'jj', conflict: false };
+  ctx.config.jjStatus.enabled = false;
+
+  const line = stripAnsi(renderSessionLine(ctx));
+  assert.equal(line.includes('jj:('), false);
+  assert.equal(line.includes('git:('), false);
 });
 
 test('renderSessionLine shows the enabled auth segment in compact layout', () => {
@@ -3609,4 +3843,294 @@ test('renderSessionLine renders advisor inline on the same row (compact layout)'
   assert.ok(plain.includes('Advisor: Opus 4.7'), `advisor segment missing: ${plain}`);
   assert.ok(plain.includes('[Opus]'), 'model badge must still render first');
   assert.ok(!plain.includes('\n'), 'compact session line must remain one row');
+});
+
+test('formatAgentModel compacts raw model IDs to family and version', () => {
+  assert.equal(formatAgentModel('claude-sonnet-5[1m]'), 'sonnet-5');
+  assert.equal(formatAgentModel('claude-opus-4-8[1m]'), 'opus-4.8');
+  assert.equal(formatAgentModel('claude-sonnet-4-6'), 'sonnet-4.6');
+  assert.equal(formatAgentModel('claude-haiku-4-5-20251001'), 'haiku-4.5');
+  assert.equal(formatAgentModel('claude-fable-5'), 'claude-fable-5');
+});
+
+test('formatAgentModel reads the version from either side of the family', () => {
+  assert.equal(formatAgentModel('claude-3-7-sonnet-20250219'), 'sonnet-3.7');
+  assert.equal(formatAgentModel('claude-3-5-haiku-20241022'), 'haiku-3.5');
+});
+
+test('formatAgentModel leaves short aliases untouched', () => {
+  assert.equal(formatAgentModel('opus'), 'opus');
+  assert.equal(formatAgentModel('sonnet'), 'sonnet');
+  assert.equal(formatAgentModel('haiku'), 'haiku');
+  assert.equal(formatAgentModel('opusplan'), 'opusplan');
+  assert.equal(formatAgentModel('OPUS'), 'OPUS');
+});
+
+test('formatAgentModel preserves provider-qualified and custom IDs', () => {
+  assert.equal(
+    formatAgentModel('us.anthropic.claude-opus-4-6-v1:0'),
+    'us.anthropic.claude-opus-4-6-v1:0',
+  );
+  assert.equal(
+    formatAgentModel('claude-3-5-sonnet@20240620'),
+    'claude-3-5-sonnet@20240620',
+  );
+  assert.equal(formatAgentModel('custom-proxy-model-v2'), 'custom-proxy-model-v2');
+  assert.equal(formatAgentModel('gpt-5-mini'), 'gpt-5-mini');
+});
+
+test('formatAgentModel sanitizes untrusted cached model labels', () => {
+  assert.equal(formatAgentModel('\u001b]8;;https://evil.example\u0007custom-model'), 'custom-model');
+  assert.equal(formatAgentModel('custom\u202Emodel'), 'custommodel');
+});
+
+test('formatAgentModel drops values that carry no model name', () => {
+  assert.equal(formatAgentModel(undefined), undefined);
+  assert.equal(formatAgentModel(''), undefined);
+  assert.equal(formatAgentModel('   '), undefined);
+  assert.equal(formatAgentModel('claude-'), undefined);
+});
+
+test('agents line renders the compacted model beside the agent type', () => {
+  const ctx = baseContext();
+  ctx.transcript.agents = [
+    {
+      id: 'agent-1',
+      type: 'general-purpose',
+      model: 'claude-sonnet-5[1m]',
+      description: 'review the diff',
+      status: 'running',
+      startTime: new Date(Date.now() - 5000),
+    },
+  ];
+
+  const output = captureRenderLines(ctx).join('\n');
+
+  assert.match(output, /general-purpose \[sonnet-5\]: review the diff/);
+});
+
+test('renderProjectLine keeps the default first-line order when projectLineOrder is absent', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'main', isDirty: false, ahead: 0, behind: 0 };
+  const line = stripAnsi(renderProjectLine(ctx));
+  const segments = line.split(' │ ');
+  assert.ok(segments[0].startsWith('[Opus'), `model badge should come first, got: ${line}`);
+  assert.ok(segments[1].includes('my-project'), `project should come second, got: ${line}`);
+  assert.ok(segments[1].includes('git:(main)'), 'project and git stay one segment');
+});
+
+test('renderProjectLine honors projectLineOrder with project before model', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'main', isDirty: true, ahead: 0, behind: 0 };
+  ctx.config.projectLineOrder = mergeConfig({ projectLineOrder: ['project', 'model'] }).projectLineOrder;
+  const line = stripAnsi(renderProjectLine(ctx));
+  const segments = line.split(' │ ');
+  assert.ok(segments[0].includes('my-project'), `project should come first, got: ${line}`);
+  assert.ok(segments[0].includes('git:(main*)'), 'git stays attached to the project segment');
+  assert.ok(segments[1].startsWith('[Opus'), `model badge should come second, got: ${line}`);
+});
+
+test('renderProjectLine orders trailing segments like sessionName ahead of the line', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.transcript.sessionName = 'Renamed Session';
+  ctx.config.display.showSessionName = true;
+  ctx.config.projectLineOrder = mergeConfig({ projectLineOrder: ['sessionName'] }).projectLineOrder;
+  const line = stripAnsi(renderProjectLine(ctx));
+  const segments = line.split(' │ ');
+  assert.equal(segments[0], 'Renamed Session');
+  assert.ok(segments[1].startsWith('[Opus'), `remaining segments keep default order, got: ${line}`);
+  assert.ok(segments[2].includes('my-project'));
+});
+
+test('renderProjectLine keeps project and git adjacent in wrap mode when reordered', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.gitStatus = { branch: 'a-very-long-branch-name', isDirty: false, ahead: 0, behind: 0 };
+  ctx.config.gitStatus.branchOverflow = 'wrap';
+  ctx.config.projectLineOrder = mergeConfig({ projectLineOrder: ['project', 'model'] }).projectLineOrder;
+  const line = stripAnsi(renderProjectLine(ctx));
+  const segments = line.split(' │ ');
+  assert.ok(segments[0].includes('my-project'), `got: ${line}`);
+  assert.ok(segments[1].includes('git:(a-very-long-branch-name)'), 'git part follows project part');
+  assert.ok(segments[2].startsWith('[Opus'), 'model badge comes after both project parts');
+});
+
+test('renderProjectLine keeps the custom line pinned first regardless of projectLineOrder', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.config.display.customLine = 'MY LABEL';
+  ctx.config.display.customLinePosition = 'first';
+  ctx.config.projectLineOrder = mergeConfig({ projectLineOrder: ['project', 'model'] }).projectLineOrder;
+  const line = stripAnsi(renderProjectLine(ctx));
+  const segments = line.split(' │ ');
+  assert.equal(segments[0], 'MY LABEL');
+  assert.ok(segments[1].includes('my-project'));
+  assert.ok(segments[2].startsWith('[Opus'));
+});
+
+test('renderSessionLine honors projectLineOrder while compact-only parts keep their slots', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.claudeMdCount = 2;
+  ctx.config.projectLineOrder = mergeConfig({ projectLineOrder: ['project', 'model'] }).projectLineOrder;
+  const line = stripAnsi(renderSessionLine(ctx));
+  const segments = line.split(' | ');
+  assert.ok(segments[0].includes('my-project'), `project should lead, got: ${line}`);
+  assert.ok(segments[1].includes('[Opus'), 'model + context cluster moves as one segment');
+  assert.ok(segments[1].includes('%'), 'context value stays attached to the model cluster');
+  assert.ok(segments[2].includes('2 CLAUDE.md'), 'compact-only config counts keep their slot');
+});
+
+test('renderSessionLine keeps the default compact order when projectLineOrder is absent', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  const line = stripAnsi(renderSessionLine(ctx));
+  const segments = line.split(' | ');
+  assert.ok(segments[0].includes('[Opus'), `model cluster should lead by default, got: ${line}`);
+  assert.ok(segments[1].includes('my-project'));
+});
+
+test('renderSessionLine preserves the native compact order with all keyed segments enabled', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/tmp/my-project';
+  ctx.transcript.sessionName = 'Renamed Session';
+  ctx.transcript.advisorModel = 'claude-opus-4-7';
+  ctx.claudeCodeVersion = '2.1.9';
+  ctx.sessionDuration = '12m 34s';
+  ctx.extraLabel = 'EXTRA';
+  ctx.authInfo = { method: 'Claude Max 20x', user: null };
+  ctx.config = mergeConfig({
+    lineLayout: 'compact',
+    display: {
+      showUsage: false,
+      showAdvisor: true,
+      showSessionName: true,
+      showClaudeCodeVersion: true,
+      showDuration: true,
+      showAuth: true,
+      customLine: 'TAIL',
+    },
+  });
+
+  const segments = stripAnsi(renderSessionLine(ctx)).split(' | ');
+  assert.ok(segments[0].startsWith('[Opus'), `model should remain first: ${segments}`);
+  assert.equal(segments[1], 'my-project');
+  assert.equal(segments[2], 'Renamed Session');
+  assert.equal(segments[3], 'CC v2.1.9');
+  assert.equal(segments[4], 'Advisor: Opus 4.7');
+  assert.equal(segments[5], '⏱️  12m 34s');
+  assert.equal(segments[6], 'EXTRA');
+  assert.equal(segments[7], 'Claude Max 20x');
+  assert.equal(segments[8], 'TAIL');
+});
+
+test('full project paths stay sanitized when projectLineOrder moves them first', () => {
+  const ctx = baseContext();
+  ctx.stdin.cwd = '/safe/\u001b]8;;https://evil.example\u0007project\u202E';
+  ctx.config = mergeConfig({
+    lineLayout: 'compact',
+    pathLevels: 'full',
+    projectLineOrder: ['project', 'model'],
+    display: { showUsage: false },
+  });
+
+  const rawCompact = renderSessionLine(ctx);
+  const rawExpanded = renderProjectLine(ctx);
+
+  assert.ok(!rawCompact.includes('\u001b]8;;https://evil.example'), 'attacker OSC target leaked into compact output');
+  assert.ok(!rawExpanded.includes('\u001b]8;;https://evil.example'), 'attacker OSC target leaked into expanded output');
+  assert.ok(!rawCompact.includes('\u202e'), 'bidi override leaked into compact output');
+  assert.ok(!rawExpanded.includes('\u202e'), 'bidi override leaked into expanded output');
+
+  const compact = stripAnsi(rawCompact);
+  const expanded = stripAnsi(rawExpanded);
+
+  assert.ok(compact.startsWith('/safe/project | [Opus'), `sanitized path should lead: ${compact}`);
+  assert.ok(expanded.startsWith('/safe/project │ [Opus'), `sanitized path should lead: ${expanded}`);
+  assert.ok(!compact.includes('evil.example'), `OSC payload leaked into compact output: ${compact}`);
+  assert.ok(!expanded.includes('evil.example'), `OSC payload leaked into expanded output: ${expanded}`);
+  assert.doesNotMatch(compact, /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/i);
+  assert.doesNotMatch(expanded, /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/i);
+});
+
+function usageDataFixture() {
+  return {
+    planName: 'Team',
+    fiveHour: 25,
+    sevenDay: 10,
+    fiveHourResetAt: null,
+    sevenDayResetAt: null,
+  };
+}
+
+function rightAlignContext() {
+  const ctx = baseContext();
+  ctx.config.lineLayout = 'expanded';
+  ctx.config.elementOrder = ['project', 'context', 'usage'];
+  ctx.config.display.mergeGroups = [['project', 'context', 'usage']];
+  ctx.config.display.showResetLabel = false;
+  ctx.usageData = usageDataFixture();
+  return ctx;
+}
+
+test('render expanded layout right-aligns configured merge-group elements to the terminal edge', () => {
+  const ctx = rightAlignContext();
+  ctx.config.display.rightAlign = ['context', 'usage'];
+
+  const lines = withTerminal(120, () => captureRenderLines(ctx));
+  const row = lines.find(line => line.includes('Context') && line.includes('Usage'));
+
+  assert.ok(row, 'expected a combined project/context/usage row');
+  assert.equal([...row].length, 120, `row should fill the terminal width, got: ${row}`);
+  assert.match(row, / {2,}Context/, `right half should be padded away from the left half, got: ${row}`);
+});
+
+test('render expanded layout treats a middle right-align entry as an ordered suffix anchor', () => {
+  const ctx = rightAlignContext();
+  ctx.config.display.rightAlign = ['context'];
+
+  const lines = withTerminal(120, () => captureRenderLines(ctx));
+  const row = lines.find(line => line.includes('Context') && line.includes('Usage'));
+
+  assert.ok(row, 'expected a combined project/context/usage row');
+  assert.ok(row.indexOf('Context') < row.indexOf('Usage'), `element order must be preserved: ${row}`);
+  assert.equal([...row].length, 120, `row should fill the terminal width, got: ${row}`);
+});
+
+test('render expanded layout keeps the separator join when no element is right-aligned', () => {
+  const ctx = rightAlignContext();
+
+  const lines = withTerminal(120, () => captureRenderLines(ctx));
+  const row = lines.find(line => line.includes('Context') && line.includes('Usage'));
+
+  assert.ok(row, 'expected a combined project/context/usage row');
+  assert.ok([...row].length < 120, `row should not be padded, got: ${row}`);
+  assert.match(row, / │ Context/, `got: ${row}`);
+});
+
+test('render expanded layout falls back to the separator join when every element is right-aligned', () => {
+  const ctx = rightAlignContext();
+  ctx.config.display.rightAlign = ['project', 'context', 'usage'];
+
+  const lines = withTerminal(120, () => captureRenderLines(ctx));
+  const row = lines.find(line => line.includes('Context') && line.includes('Usage'));
+
+  assert.ok(row, 'expected a combined project/context/usage row');
+  assert.ok([...row].length < 120, `row should not be padded, got: ${row}`);
+  assert.match(row, / │ Context/, `got: ${row}`);
+});
+
+test('render expanded layout still stacks a right-aligned group that does not fit', () => {
+  const ctx = rightAlignContext();
+  ctx.config.display.rightAlign = ['context', 'usage'];
+
+  const lines = withTerminal(35, () => captureRenderLines(ctx));
+  const combined = lines.find(line => line.includes('Context') && line.includes('Usage'));
+  const contextLine = lines.find(line => line.includes('Context') && !line.includes('Usage'));
+
+  assert.equal(combined, undefined, 'narrow terminals should stack instead of combining');
+  assert.ok(contextLine, 'expected a standalone context line');
 });

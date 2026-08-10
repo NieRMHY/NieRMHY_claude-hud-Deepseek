@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import { getHudPluginDir } from './claude-config-dir.js';
 import { createDebug } from './debug.js';
 import type { Language } from './i18n/types.js';
+import { MAX_TERMINAL_WIDTH } from './utils/terminal.js';
 
 const debug = createDebug('config');
 
@@ -24,6 +25,16 @@ export type GitBranchOverflowMode = 'truncate' | 'wrap';
 export type ModelFormatMode = 'full' | 'compact' | 'short';
 export type TimeFormatMode = 'relative' | 'absolute' | 'both' | 'elapsed' | 'elapsedAndAbsolute';
 export type CustomLinePosition = 'first' | 'last';
+// Hour cycle for wall-clock time display; 'auto' defers to the system locale.
+export type HourCycleMode = 'auto' | 'h11' | 'h12' | 'h23' | 'h24';
+
+/**
+ * Controls how many directory segments of cwd are shown in the project badge.
+ *
+ *   1 | 2 | 3: Show the last N segments (e.g. 2 -> "ai_workspace/knowledge-forge")
+ *   'full':    Show the entire absolute path from root (e.g. "/Users/name/…")
+ */
+export type PathLevels = 1 | 2 | 3 | 'full';
 export type HudElement =
   | 'project'
   | 'addedDirs'
@@ -38,6 +49,34 @@ export type HudElement =
   | 'agents'
   | 'todos'
   | 'sessionTime';
+
+/**
+ * Coarse, orderable segments of the first HUD line (the identity/project
+ * line). Shared by the expanded project line and the compact session line:
+ *
+ *   model:       provider + model badge + effort (compact mode also keeps the
+ *                context bar attached to this segment)
+ *   project:     project path + added dirs + git status (kept as one segment)
+ *   advisor:     advisor model label
+ *   sessionName: session title from /rename
+ *   version:     Claude Code version
+ *   extra:       extra-cmd custom label
+ *   duration:    session duration
+ *   cost:        session cost estimate
+ *   speed:       output speed
+ *   auth:        auth method / account
+ */
+export type FirstLineSegment =
+  | 'model'
+  | 'project'
+  | 'advisor'
+  | 'sessionName'
+  | 'version'
+  | 'extra'
+  | 'duration'
+  | 'cost'
+  | 'speed'
+  | 'auth';
 
 export type AddedDirsLayout = 'inline' | 'line';
 export type HudColorName =
@@ -89,16 +128,35 @@ export const DEFAULT_MERGE_GROUPS: HudElement[][] = [
   ['context', 'usage'],
 ];
 
+const PROJECT_LINE_SEGMENTS: FirstLineSegment[] = [
+  'model',
+  'project',
+  'advisor',
+  'sessionName',
+  'version',
+  'extra',
+  'duration',
+  'cost',
+  'speed',
+  'auth',
+];
+
+// An empty order is deliberate: renderers retain their byte-for-byte native
+// order until the user opts in to moving one or more segments.
+export const DEFAULT_PROJECT_LINE_ORDER: FirstLineSegment[] = [];
+
 const KNOWN_ELEMENTS = new Set<HudElement>(DEFAULT_ELEMENT_ORDER);
+const KNOWN_FIRST_LINE_SEGMENTS = new Set<FirstLineSegment>(PROJECT_LINE_SEGMENTS);
 
 export interface HudConfig {
   language: Language;
   lineLayout: LineLayoutType;
   showSeparators: boolean;
-  pathLevels: 1 | 2 | 3;
+  pathLevels: PathLevels;
   maxWidth: number | null;
   forceMaxWidth: boolean;
   elementOrder: HudElement[];
+  projectLineOrder: FirstLineSegment[];
   gitStatus: {
     enabled: boolean;
     showDirty: boolean;
@@ -107,6 +165,11 @@ export interface HudConfig {
     branchOverflow: GitBranchOverflowMode;
     pushWarningThreshold: number;
     pushCriticalThreshold: number;
+  };
+  jjStatus: {
+    enabled: boolean;
+    showDirty: boolean;
+    showConflicts: boolean;
   };
   display: {
     showModel: boolean;
@@ -156,6 +219,10 @@ export interface HudConfig {
     // occurred this session, counted from transcript compact_boundary entries.
     showCompactions: boolean;
     mergeGroups: HudElement[][];
+    // Elements that are pushed to the right edge of a combined merge-group
+    // line. Only applies when the group actually renders on one line and the
+    // terminal width is known; otherwise the normal separator join is used.
+    rightAlign: HudElement[];
     autocompactBuffer: AutocompactBufferMode;
     contextWarningThreshold: number;
     contextCriticalThreshold: number;
@@ -185,6 +252,8 @@ export interface HudConfig {
     customLine: string;
     customLinePosition: CustomLinePosition;
     timeFormat: TimeFormatMode;
+    hourCycle: HourCycleMode;
+    showClockSeconds: boolean;
     // Show the advisor model when `/advisor` is configured for the session.
     // The model ID is read from the transcript (see TranscriptData.advisorModel)
     // so it reflects the actual current choice, not a global default.
@@ -206,6 +275,7 @@ export const DEFAULT_CONFIG: HudConfig = {
   maxWidth: null,
   forceMaxWidth: false,
   elementOrder: [...DEFAULT_ELEMENT_ORDER],
+  projectLineOrder: [...DEFAULT_PROJECT_LINE_ORDER],
   gitStatus: {
     enabled: true,
     showDirty: true,
@@ -214,6 +284,11 @@ export const DEFAULT_CONFIG: HudConfig = {
     branchOverflow: 'truncate',
     pushWarningThreshold: 0,
     pushCriticalThreshold: 0,
+  },
+  jjStatus: {
+    enabled: false,
+    showDirty: true,
+    showConflicts: true,
   },
   display: {
     showModel: true,
@@ -255,6 +330,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showLastResponseAt: false,
     showCompactions: false,
     mergeGroups: DEFAULT_MERGE_GROUPS.map(group => [...group]),
+    rightAlign: [],
     autocompactBuffer: 'enabled',
     contextWarningThreshold: 70,
     contextCriticalThreshold: 85,
@@ -272,6 +348,8 @@ export const DEFAULT_CONFIG: HudConfig = {
     customLine: '',
     customLinePosition: 'last',
     timeFormat: 'relative',
+    hourCycle: 'auto',
+    showClockSeconds: false,
     showAdvisor: false,
     advisorOverride: '',
     autoCompactWindow: null,
@@ -298,8 +376,8 @@ export function getConfigPath(): string {
   return path.join(getHudPluginDir(homeDir), 'config.json');
 }
 
-function validatePathLevels(value: unknown): value is 1 | 2 | 3 {
-  return value === 1 || value === 2 || value === 3;
+function validatePathLevels(value: unknown): value is PathLevels {
+  return value === 1 || value === 2 || value === 3 || value === 'full';
 }
 
 function validateLineLayout(value: unknown): value is LineLayoutType {
@@ -340,6 +418,10 @@ function validateTimeFormat(value: unknown): value is TimeFormatMode {
 
 function validateCustomLinePosition(value: unknown): value is CustomLinePosition {
   return value === 'first' || value === 'last';
+}
+
+function validateHourCycle(value: unknown): value is HourCycleMode {
+  return value === 'auto' || value === 'h11' || value === 'h12' || value === 'h23' || value === 'h24';
 }
 
 function validateColorName(value: unknown): value is HudColorName {
@@ -399,6 +481,59 @@ function validateElementOrder(value: unknown): HudElement[] {
   }
 
   return elementOrder.length > 0 ? elementOrder : [...DEFAULT_ELEMENT_ORDER];
+}
+
+// Unlike `elementOrder`, `projectLineOrder` only reorders segments. A partial
+// list is preserved as a requested prefix; each renderer appends all remaining
+// visible parts in its own existing order.
+function validateProjectLineOrder(value: unknown): FirstLineSegment[] {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_PROJECT_LINE_ORDER];
+  }
+
+  const seen = new Set<FirstLineSegment>();
+  const order: FirstLineSegment[] = [];
+
+  for (const item of value) {
+    if (typeof item !== 'string' || !KNOWN_FIRST_LINE_SEGMENTS.has(item as FirstLineSegment)) {
+      continue;
+    }
+
+    const segment = item as FirstLineSegment;
+    if (seen.has(segment)) {
+      continue;
+    }
+
+    seen.add(segment);
+    order.push(segment);
+  }
+
+  return order;
+}
+
+function validateRightAlign(value: unknown): HudElement[] {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_CONFIG.display.rightAlign];
+  }
+
+  const seen = new Set<HudElement>();
+  const elements: HudElement[] = [];
+
+  for (const item of value) {
+    if (typeof item !== 'string' || !KNOWN_ELEMENTS.has(item as HudElement)) {
+      continue;
+    }
+
+    const element = item as HudElement;
+    if (seen.has(element)) {
+      continue;
+    }
+
+    seen.add(element);
+    elements.push(element);
+  }
+
+  return elements;
 }
 
 function validateMergeGroups(value: unknown): HudElement[][] {
@@ -472,7 +607,7 @@ function migrateConfig(userConfig: Partial<HudConfig> & LegacyConfig): Partial<H
       const obj = userConfig.layout as Record<string, unknown>;
       if (typeof obj.lineLayout === 'string') migrated.lineLayout = obj.lineLayout as any;
       if (typeof obj.showSeparators === 'boolean') migrated.showSeparators = obj.showSeparators;
-      if (typeof obj.pathLevels === 'number') migrated.pathLevels = obj.pathLevels as any;
+      if (typeof obj.pathLevels === 'number' || obj.pathLevels === 'full') migrated.pathLevels = obj.pathLevels as any;
     }
     delete migrated.layout;
   }
@@ -549,10 +684,11 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
 
   const rawMaxWidth = (migrated as Record<string, unknown>).maxWidth;
   const maxWidth = (typeof rawMaxWidth === 'number' && Number.isFinite(rawMaxWidth) && rawMaxWidth > 0)
-    ? Math.floor(rawMaxWidth)
+    ? Math.min(Math.floor(rawMaxWidth), MAX_TERMINAL_WIDTH)
     : null;
 
   const elementOrder = validateElementOrder(migrated.elementOrder);
+  const projectLineOrder = validateProjectLineOrder(migrated.projectLineOrder);
   const forceMaxWidth = typeof (migrated as Record<string, unknown>).forceMaxWidth === 'boolean'
     ? (migrated as Record<string, unknown>).forceMaxWidth as boolean
     : DEFAULT_CONFIG.forceMaxWidth;
@@ -575,6 +711,18 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
       : DEFAULT_CONFIG.gitStatus.branchOverflow,
     pushWarningThreshold: validateCountThreshold(migrated.gitStatus?.pushWarningThreshold),
     pushCriticalThreshold: validateCountThreshold(migrated.gitStatus?.pushCriticalThreshold),
+  };
+
+  const jjStatus = {
+    enabled: typeof migrated.jjStatus?.enabled === 'boolean'
+      ? migrated.jjStatus.enabled
+      : DEFAULT_CONFIG.jjStatus.enabled,
+    showDirty: typeof migrated.jjStatus?.showDirty === 'boolean'
+      ? migrated.jjStatus.showDirty
+      : DEFAULT_CONFIG.jjStatus.showDirty,
+    showConflicts: typeof migrated.jjStatus?.showConflicts === 'boolean'
+      ? migrated.jjStatus.showConflicts
+      : DEFAULT_CONFIG.jjStatus.showConflicts,
   };
 
   const display = {
@@ -697,6 +845,7 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
       ? migrated.display.showCompactions
       : DEFAULT_CONFIG.display.showCompactions,
     mergeGroups: validateMergeGroups(migrated.display?.mergeGroups),
+    rightAlign: validateRightAlign(migrated.display?.rightAlign),
     autocompactBuffer: validateAutocompactBuffer(migrated.display?.autocompactBuffer)
       ? migrated.display.autocompactBuffer
       : DEFAULT_CONFIG.display.autocompactBuffer,
@@ -747,6 +896,12 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
     timeFormat: validateTimeFormat(migrated.display?.timeFormat)
       ? migrated.display.timeFormat
       : DEFAULT_CONFIG.display.timeFormat,
+    hourCycle: validateHourCycle(migrated.display?.hourCycle)
+      ? migrated.display.hourCycle
+      : DEFAULT_CONFIG.display.hourCycle,
+    showClockSeconds: typeof migrated.display?.showClockSeconds === 'boolean'
+      ? migrated.display.showClockSeconds
+      : DEFAULT_CONFIG.display.showClockSeconds,
     showAdvisor: typeof migrated.display?.showAdvisor === 'boolean'
       ? migrated.display.showAdvisor
       : DEFAULT_CONFIG.display.showAdvisor,
@@ -798,7 +953,7 @@ export function mergeConfig(userConfig: Partial<HudConfig>): HudConfig {
       : DEFAULT_CONFIG.colors.barEmpty,
   };
 
-  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, gitStatus, display, colors };
+  return { language, lineLayout, showSeparators, pathLevels, maxWidth, forceMaxWidth, elementOrder, projectLineOrder, gitStatus, jjStatus, display, colors };
 }
 
 export async function loadConfig(): Promise<HudConfig> {
